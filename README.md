@@ -1,16 +1,18 @@
-# Longhua Weather Widget
+# Longhua Weather Widget — Anthropic-inspired Edition
 
-Longhua Weather Widget v1.1.0 - Anthropic-inspired Edition is a compact Windows PowerShell WPF weather widget for supported Chinese city and district locations. The default location is Shenzhen Longhua.
+Anthropic-inspired 风格的轻量 Windows 天气小组件。支持当前天气、临近预报、模型风险提示、中文 / English 双语界面、地区切换、侧边抽屉和本地设置保存。
+
+A lightweight Anthropic-inspired Windows weather widget with current weather, near-term forecast, model risk tips, bilingual UI, region switching, a side-drawer window, and local settings.
 
 This is the 基础版本: a WPF-only desktop widget without WebView2, Node.js, Cloudflare, API keys, telemetry, or tracking.
 
 ## Download
 
-Download the latest Windows build from GitHub Releases:
+Download v1.1.0 from GitHub Releases:
 
-https://github.com/M47E1/longhua-weather-widget/releases
+https://github.com/M47E1/longhua-weather-widget/releases/tag/v1.1.0
 
-v1.1.0 assets:
+Recommended assets:
 
 - `LonghuaWeatherWidget-v1.1.0-anthropic-win-x64.exe`
 - `LonghuaWeatherWidget-v1.1.0-anthropic-win-x64.zip`
@@ -18,20 +20,22 @@ v1.1.0 assets:
 
 The ZIP contains only `LICENSE`, `LonghuaWeatherWidget.exe`, and `README.txt`.
 
-No administrator rights are required. The executable is unsigned, so Windows SmartScreen may show an unknown publisher warning on first launch.
+No administrator rights are required.
 
 ## Edition
 
-The v1.1.0 UI uses an Anthropic-inspired style: paper-toned surfaces, restrained borders, compact typography, and warm accent colors. It does not use Anthropic or Claude logos, brand assets, or official product claims.
+The v1.1.0 UI uses an Anthropic-inspired style: paper-toned surfaces, restrained borders, compact typography, side-drawer mode, and warm accent controls. It does not use Anthropic or Claude logos, brand assets, or official product claims.
 
 ## Features
 
 - Current weather and forecast views are visually and textually distinct: `Now` for current data, `Forecast · HH:mm` for forecast data.
 - Open-Meteo is the primary weather provider; wttr.in remains the fallback.
 - Cached weather stays usable when refresh fails.
+- Model-derived risk tips are separated from official weather warnings.
 - Chinese and English UI labels.
-- 47 supported real regions in the current catalog.
-- Compact drawer UI with settings, language, refresh interval, and forecast slot controls.
+- 47 real supported regions in the current built-in catalog.
+- Side-drawer window with settings, language, refresh interval, and forecast slot controls.
+- Local settings are saved next to the launched script or EXE.
 
 ## Run From Source
 
@@ -72,7 +76,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Run-ProjectTests.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\LonghuaWeatherWidget.ps1 -TestMode
 ```
 
-Additional release gates include English no-CJK, UI region render smoke, real UI interaction smoke, and release asset verification.
+Release evidence uses `reports/final-evidence/english-ui-gate-20260627-125712/final-evidence-index.json` from the RC source tree.
+
+## Known Limitations
+
+- The EXE is unsigned.
+- Windows SmartScreen may show an Unknown publisher warning.
+- Open-Meteo provides model current weather, not official on-site observation.
+- The base edition does not integrate an official weather warning API.
+- Model-derived content is a risk tip, not an official warning.
+- The built-in region catalog contains 47 real supported regions.
+- `RealUiInteractionSmoke` remains FAIL because of WPF UI Automation popup and AutomationId limitations.
+- Anthropic-inspired only: this is not an official Anthropic or Claude product.
 
 ## Weather Providers
 
