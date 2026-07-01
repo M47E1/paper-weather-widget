@@ -1,0 +1,10 @@
+<Application
+    x:Class="WeatherLauncher.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <SolidColorBrush x:Key="PaperTextBrush" Color="#2F2C25" />
+        <SolidColorBrush x:Key="PaperMutedBrush" Color="#8A867A" />
+        <SolidColorBrush x:Key="PaperAccentBrush" Color="#D97757" />
+    </Application.Resources>
+</Application>
