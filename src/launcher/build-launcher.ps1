@@ -1,13 +1,14 @@
 #Requires -Version 5.1
 param(
     [string]$OutputDir = '',
-    [string]$Version = '2.0.0'
+    [string]$Version = '2.0.1',
+    [switch]$SingleExe
 )
 
 $ErrorActionPreference = 'Stop'
 
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-    throw 'Version must use Major.Minor.Patch format, for example 2.0.0.'
+    throw 'Version must use Major.Minor.Patch format, for example 2.0.1.'
 }
 
 $launcherRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
@@ -113,6 +114,19 @@ if (Test-Path -LiteralPath $iconPath -PathType Leaf) {
 foreach ($reference in $references) {
     $compilerArgs += "/reference:$reference"
 }
+
+if ($SingleExe) {
+    $workerResource = Join-Path $repoRoot 'src\worker\WeatherWorker.ps1'
+    $catalogResource = Join-Path $repoRoot 'src\worker\ChinaRegionCatalog.json'
+    foreach ($resource in @($workerResource, $catalogResource)) {
+        if (-not (Test-Path -LiteralPath $resource -PathType Leaf)) {
+            throw "Resource not found: $resource"
+        }
+    }
+    $compilerArgs += "/resource:$workerResource,WeatherLauncher.Resources.WeatherWorker.ps1"
+    $compilerArgs += "/resource:$catalogResource,WeatherLauncher.Resources.ChinaRegionCatalog.json"
+}
+
 $compilerArgs += $sources
 
 & $csc @compilerArgs
@@ -123,14 +137,16 @@ if (Test-Path -LiteralPath $generatedVersionSource) {
     Remove-Item -LiteralPath $generatedVersionSource -Force
 }
 
-Copy-Item -LiteralPath (Join-Path $repoRoot 'src\worker\WeatherWorker.ps1') -Destination (Join-Path $OutputDir 'WeatherWorker.ps1') -Force
-Copy-Item -LiteralPath (Join-Path $repoRoot 'src\worker\ChinaRegionCatalog.json') -Destination (Join-Path $OutputDir 'ChinaRegionCatalog.json') -Force
-Copy-Item -LiteralPath (Join-Path $launcherRoot 'App.xaml') -Destination (Join-Path $OutputDir 'App.xaml') -Force
-Copy-Item -LiteralPath (Join-Path $launcherRoot 'MainWindow.xaml') -Destination (Join-Path $OutputDir 'MainWindow.xaml') -Force
+if (-not $SingleExe) {
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'src\worker\WeatherWorker.ps1') -Destination (Join-Path $OutputDir 'WeatherWorker.ps1') -Force
+    Copy-Item -LiteralPath (Join-Path $repoRoot 'src\worker\ChinaRegionCatalog.json') -Destination (Join-Path $OutputDir 'ChinaRegionCatalog.json') -Force
+    Copy-Item -LiteralPath (Join-Path $launcherRoot 'App.xaml') -Destination (Join-Path $OutputDir 'App.xaml') -Force
+    Copy-Item -LiteralPath (Join-Path $launcherRoot 'MainWindow.xaml') -Destination (Join-Path $OutputDir 'MainWindow.xaml') -Force
+}
 
 Write-Host "Launcher: $exePath"
-Write-Host "Worker: $(Join-Path $OutputDir 'WeatherWorker.ps1')"
-
-
-
-
+if ($SingleExe) {
+    Write-Host 'Bundled: WeatherWorker.ps1, ChinaRegionCatalog.json'
+} else {
+    Write-Host "Worker: $(Join-Path $OutputDir 'WeatherWorker.ps1')"
+}

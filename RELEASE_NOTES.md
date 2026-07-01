@@ -1,6 +1,6 @@
-# Paper Weather Widget v2.0.0 / 纸感天气小组件 v2.0.0
+# Paper Weather Widget v2.0.1 / 纸感天气小组件 v2.0.1
 
-Release title: Paper Weather Widget v2.0.0 / 纸感天气小组件 v2.0.0
+Release title: Paper Weather Widget v2.0.1 / 纸感天气小组件 v2.0.1
 
 ## English
 
@@ -13,31 +13,22 @@ Release title: Paper Weather Widget v2.0.0 / 纸感天气小组件 v2.0.0
 - Enlarges and aligns the title-bar controls so the cache / live badge, refresh interval, settings, minimize, and close buttons feel balanced.
 - Fixes the expanded default height so weather metrics and settings are no longer clipped.
 - Adds a settings footer credit link to `M47E1/paper-weather-widget` with an external-link arrow, rendered as plain text without a card background.
-- Packages the full runtime folder for v2.0.0 instead of shipping a single legacy PowerShell exe.
+- Packages the runtime into a single Windows exe for v2.0.1.
 
 ### Package
 
-Download `PaperWeatherWidget-v2.0.0-win-x64.zip`, unzip it, and run `WeatherLauncher.exe`. Keep every file from the ZIP in the same folder.
-
-ZIP contents:
-
-- `WeatherLauncher.exe`
-- `WeatherWorker.ps1`
-- `ChinaRegionCatalog.json`
-- `App.xaml`
-- `MainWindow.xaml`
-- `LICENSE`
-- `README.txt`
+Download `PaperWeatherWidget-v2.0.1-win-x64.exe` and run it directly. The worker script and region catalog are bundled inside the exe and are released to the local user cache at runtime.
 
 No administrator rights, API key, WebView2, Node.js, telemetry, or paid weather service is required.
 
 ### Validation
 
-- `src/launcher/build-launcher.ps1 -Version 2.0.0`: PASS.
-- `build-thinclr-release.ps1 -Version 2.0.0`: PASS.
-- Package verification: ZIP contains the expected seven runtime files.
-- Version verification: `WeatherLauncher.exe` FileVersion is `2.0.0.0` and ProductVersion is `2.0.0`.
-- UI verification: the settings footer shows `爱来自 M47E1/paper-weather-widget` and the external-link arrow; closing settings hides the credit from the weather view.
+- `src/launcher/build-launcher.ps1 -Version 2.0.1`: PASS.
+- `build-single-exe-release.ps1 -Version 2.0.1`: PASS.
+- Project tests: `271/271 PASS`.
+- Package verification: the exe contains `WeatherWorker.ps1` and `ChinaRegionCatalog.json` as embedded resources.
+- Version verification: `PaperWeatherWidget-v2.0.1-win-x64.exe` FileVersion is `2.0.1.0` and ProductVersion is `2.0.1`.
+- Single exe smoke: running from an otherwise empty folder extracts the worker and catalog, opens settings, and shows `爱来自 M47E1/paper-weather-widget` with the external-link arrow.
 
 ## 中文
 
@@ -50,43 +41,27 @@ No administrator rights, API key, WebView2, Node.js, telemetry, or paid weather 
 - 放大并统一标题栏控件，让缓存 / 实时标记、刷新频率、设置、最小化和关闭按钮更平衡。
 - 修正展开后的默认高度，天气指标和设置区不再被遮挡。
 - 在设置页底部加入 `M47E1/paper-weather-widget` 来源链接和外链箭头，改为纯文字样式，不再显示背后的卡片容器。
-- v2.0.0 改为发布完整运行目录，不再只发布旧版单文件 PowerShell exe。
+- v2.0.1 改为发布单个 Windows exe。
 
 ### 包内容
 
-下载 `PaperWeatherWidget-v2.0.0-win-x64.zip`，解压后运行 `WeatherLauncher.exe`。请保持 ZIP 内全部文件在同一个文件夹。
-
-ZIP 内容：
-
-- `WeatherLauncher.exe`
-- `WeatherWorker.ps1`
-- `ChinaRegionCatalog.json`
-- `App.xaml`
-- `MainWindow.xaml`
-- `LICENSE`
-- `README.txt`
+下载 `PaperWeatherWidget-v2.0.1-win-x64.exe` 后直接运行。worker 脚本和地区库已内嵌在 exe 中，运行时会释放到当前用户的本地缓存目录。
 
 无需管理员权限、API key、WebView2、Node.js、遥测或付费天气服务。
 
 ### 验证
 
-- `src/launcher/build-launcher.ps1 -Version 2.0.0`：通过。
-- `build-thinclr-release.ps1 -Version 2.0.0`：通过。
-- 打包校验：ZIP 包含预期 7 个运行文件。
-- 版本校验：`WeatherLauncher.exe` FileVersion 为 `2.0.0.0`，ProductVersion 为 `2.0.0`。
-- UI 校验：设置页底部显示 `爱来自 M47E1/paper-weather-widget` 和外链箭头；关闭设置后，天气页不显示来源链接。
+- `src/launcher/build-launcher.ps1 -Version 2.0.1`：通过。
+- `build-single-exe-release.ps1 -Version 2.0.1`：通过。
+- 项目测试：`271/271 PASS`。
+- 打包校验：exe 内嵌了 `WeatherWorker.ps1` 和 `ChinaRegionCatalog.json`。
+- 版本校验：`PaperWeatherWidget-v2.0.1-win-x64.exe` FileVersion 为 `2.0.1.0`，ProductVersion 为 `2.0.1`。
+- 单 exe smoke：在空目录中只运行这一个 exe，可以自动释放 worker 和地区库，打开设置页后显示 `爱来自 M47E1/paper-weather-widget` 和外链箭头。
 
 ## SHA256
 
 ```text
-dc6a013b563f3dd57e5513d7e028ad96892e042c16563a7ee677bea8219fc73d  PaperWeatherWidget-v2.0.0-win-x64.zip
-8c4fa602002d129a33860b14b56b344b9f81118213e1c91e435940c2ca1575a2  PaperWeatherWidget-v2.0.0-win-x64/WeatherLauncher.exe
-2054523faa4b083293b6661336648b5b667bb93f0f32cfb016d73735adf33953  PaperWeatherWidget-v2.0.0-win-x64/WeatherWorker.ps1
-e4a0963613a176fa16ceb50783bc4e55a1e1bba37734614556023763a47b445a  PaperWeatherWidget-v2.0.0-win-x64/ChinaRegionCatalog.json
-313c2858fb81ee5305a04a283741f5eeb6453dcf9973b3c99ff4cb92025e68a9  PaperWeatherWidget-v2.0.0-win-x64/App.xaml
-523b28ccfe07ceb2c47fedfd2caf02b54665ccfade372923bbbf01b3854d39d1  PaperWeatherWidget-v2.0.0-win-x64/MainWindow.xaml
-3f016f66f73251ed95c7c1950bc8c0ddee702fb28c076d3e806399e507798624  PaperWeatherWidget-v2.0.0-win-x64/LICENSE
-087f76b88cfcc39b372404c524e069b92485f164d488aa6e908333286ac35c82  PaperWeatherWidget-v2.0.0-win-x64/README.txt
+80b06d773e1fc65563aaa0153a5ebb9882e11a1f4ff8446c58441e5026ff904f  PaperWeatherWidget-v2.0.1-win-x64.exe
 ```
 
 ## Notes / 说明

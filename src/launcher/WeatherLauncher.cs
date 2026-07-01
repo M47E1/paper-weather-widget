@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Globalization;
 using System.Windows;
 
@@ -231,6 +232,124 @@ namespace WeatherLauncher
         }
     }
 
+
+    internal static class BundledRuntime
+    {
+        private const string WorkerResourceName = "WeatherLauncher.Resources.WeatherWorker.ps1";
+        private const string CatalogResourceName = "WeatherLauncher.Resources.ChinaRegionCatalog.json";
+        private static string runtimeRoot;
+
+        public static string TryGetWorkerScript()
+        {
+            var root = EnsureExtracted();
+            if (String.IsNullOrWhiteSpace(root)) { return String.Empty; }
+            var path = Path.Combine(root, "WeatherWorker.ps1");
+            return File.Exists(path) ? path : String.Empty;
+        }
+
+        public static string TryGetCatalogPath()
+        {
+            var root = EnsureExtracted();
+            if (String.IsNullOrWhiteSpace(root)) { return String.Empty; }
+            var path = Path.Combine(root, "ChinaRegionCatalog.json");
+            return File.Exists(path) ? path : String.Empty;
+        }
+
+        private static string EnsureExtracted()
+        {
+            if (!String.IsNullOrWhiteSpace(runtimeRoot)) { return runtimeRoot; }
+            if (!HasResource(WorkerResourceName) || !HasResource(CatalogResourceName)) { return String.Empty; }
+
+            try
+            {
+                var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+                if (String.IsNullOrWhiteSpace(localAppData))
+                {
+                    localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                }
+                if (String.IsNullOrWhiteSpace(localAppData))
+                {
+                    localAppData = Path.GetTempPath();
+                }
+
+                var root = Path.Combine(localAppData, "PaperWeatherWidget", "runtime", GetRuntimeVersion());
+                Directory.CreateDirectory(root);
+                ExtractResource(WorkerResourceName, Path.Combine(root, "WeatherWorker.ps1"));
+                ExtractResource(CatalogResourceName, Path.Combine(root, "ChinaRegionCatalog.json"));
+                runtimeRoot = root;
+                return runtimeRoot;
+            }
+            catch
+            {
+                return String.Empty;
+            }
+        }
+
+        private static bool HasResource(string resourceName)
+        {
+            var assembly = Assembly.GetEntryAssembly();
+            if (assembly == null) { return false; }
+            using (var stream = assembly.GetManifestResourceStream(resourceName))
+            {
+                return stream != null;
+            }
+        }
+
+        private static void ExtractResource(string resourceName, string destinationPath)
+        {
+            var assembly = Assembly.GetEntryAssembly();
+            if (assembly == null) { return; }
+            using (var stream = assembly.GetManifestResourceStream(resourceName))
+            {
+                if (stream == null) { return; }
+                if (File.Exists(destinationPath))
+                {
+                    try
+                    {
+                        var existing = new FileInfo(destinationPath);
+                        if (existing.Length == stream.Length) { return; }
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                var tempPath = destinationPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                using (var output = File.Create(tempPath))
+                {
+                    stream.CopyTo(output);
+                }
+                if (File.Exists(destinationPath))
+                {
+                    File.Delete(destinationPath);
+                }
+                File.Move(tempPath, destinationPath);
+            }
+        }
+
+        private static string GetRuntimeVersion()
+        {
+            var assembly = Assembly.GetEntryAssembly();
+            if (assembly != null)
+            {
+                var attributes = assembly.GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false);
+                if (attributes.Length > 0)
+                {
+                    var info = attributes[0] as AssemblyInformationalVersionAttribute;
+                    if (info != null && !String.IsNullOrWhiteSpace(info.InformationalVersion))
+                    {
+                        return info.InformationalVersion;
+                    }
+                }
+                var version = assembly.GetName().Version;
+                if (version != null)
+                {
+                    return String.Format(CultureInfo.InvariantCulture, "{0}.{1}.{2}", version.Major, version.Minor, Math.Max(0, version.Build));
+                }
+            }
+            return "runtime";
+        }
+    }
     internal static class LauncherPaths
     {
         public static string FindRepositoryRoot()
@@ -250,7 +369,10 @@ namespace WeatherLauncher
                 }
             }
 
-            return Environment.CurrentDirectory;
+            var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            return String.IsNullOrWhiteSpace(baseDirectory)
+                ? Environment.CurrentDirectory
+                : Path.GetFullPath(baseDirectory);
         }
 
         public static string FindWorkerScript(string explicitPath)
@@ -262,6 +384,12 @@ namespace WeatherLauncher
                 {
                     return full;
                 }
+            }
+
+            var bundledWorker = BundledRuntime.TryGetWorkerScript();
+            if (!String.IsNullOrWhiteSpace(bundledWorker) && File.Exists(bundledWorker))
+            {
+                return Path.GetFullPath(bundledWorker);
             }
 
             var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;

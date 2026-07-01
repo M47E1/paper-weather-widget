@@ -1268,6 +1268,8 @@ namespace WeatherLauncher
 
         private static IEnumerable<string> LocalRegionCatalogPaths()
         {
+            var bundledCatalog = BundledRuntime.TryGetCatalogPath();
+            if (!String.IsNullOrWhiteSpace(bundledCatalog)) { yield return bundledCatalog; }
             var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
             var repoRoot = LauncherPaths.FindRepositoryRoot();
             yield return Path.Combine(baseDirectory, "ChinaRegionCatalog.json");

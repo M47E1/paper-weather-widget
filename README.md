@@ -10,32 +10,24 @@ This project is independent. It is not affiliated with Anthropic, Claude, Open-M
 
 ## Download / 下载
 
-Download v2.0.0 from GitHub Releases:
+Download v2.0.1 from GitHub Releases:
 
-从 GitHub Releases 下载 v2.0.0：
+从 GitHub Releases 下载 v2.0.1：
 
-https://github.com/M47E1/paper-weather-widget/releases/tag/v2.0.0
+https://github.com/M47E1/paper-weather-widget/releases/tag/v2.0.1
 
 Recommended assets / 推荐下载：
 
-- `PaperWeatherWidget-v2.0.0-win-x64.zip`
+- `PaperWeatherWidget-v2.0.1-win-x64.exe`
 - `SHA256SUMS.txt`
 
-The ZIP is the full Thin CLR package. Keep these files in the same folder:
+Run `PaperWeatherWidget-v2.0.1-win-x64.exe` directly. The worker script and region catalog are bundled inside the exe and are released to the local user cache at runtime.
 
-ZIP 是完整 Thin CLR 包。请保持这些文件在同一个文件夹中：
+直接运行 `PaperWeatherWidget-v2.0.1-win-x64.exe`。worker 脚本和地区库已内嵌在 exe 中，运行时会释放到当前用户的本地缓存目录。
 
-- `WeatherLauncher.exe`
-- `WeatherWorker.ps1`
-- `ChinaRegionCatalog.json`
-- `App.xaml`
-- `MainWindow.xaml`
-- `LICENSE`
-- `README.txt`
+No administrator rights are required.
 
-Run `WeatherLauncher.exe`. No administrator rights are required.
-
-运行 `WeatherLauncher.exe`。无需管理员权限。
+无需管理员权限。
 
 ## What It Does / 功能
 
@@ -66,29 +58,28 @@ No API key, account, paid weather service, telemetry, WebView2, Node.js, or brow
 
 ## Build From Source / 从源码构建
 
-Build the Thin CLR launcher:
+Build the Thin CLR launcher for development:
 
-构建 Thin CLR 启动器：
+构建 Thin CLR 开发版启动器：
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 2.0.0
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 2.0.1
 ```
 
-Create the full release ZIP and hashes:
+Create the single exe release asset and hashes:
 
-生成完整 release ZIP 和哈希：
+生成单 exe release 资产和哈希：
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\build-thinclr-release.ps1 -Version 2.0.0
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\build-single-exe-release.ps1 -Version 2.0.1
 ```
 
 Release output:
 
 发布输出：
 
-- `dist/release/v2.0.0/PaperWeatherWidget-v2.0.0-win-x64/`
-- `dist/release/v2.0.0/PaperWeatherWidget-v2.0.0-win-x64.zip`
-- `dist/release/v2.0.0/SHA256SUMS.txt`
+- `dist/release/v2.0.1/PaperWeatherWidget-v2.0.1-win-x64.exe`
+- `dist/release/v2.0.1/SHA256SUMS.txt`
 
 ## Run From Source / 从源码运行
 
@@ -105,7 +96,7 @@ Thin CLR development build:
 Thin CLR 开发构建：
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 2.0.0
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 2.0.1
 .\dist\launcher\WeatherLauncher.exe
 ```
 

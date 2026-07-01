@@ -122,6 +122,32 @@ Describe 'Thin CLR launcher contracts' {
         }
     }
 
+    It 'supports single exe embedded worker packaging' {
+        Test-Path -LiteralPath (Join-Path $repoRoot 'build-single-exe-release.ps1') | Should Be $true
+        $launcherText = Get-Content -LiteralPath (Join-Path $launcherRoot 'WeatherLauncher.cs') -Raw
+        $buildText = Get-Content -LiteralPath (Join-Path $launcherRoot 'build-launcher.ps1') -Raw
+        $singleBuildText = Get-Content -LiteralPath (Join-Path $repoRoot 'build-single-exe-release.ps1') -Raw
+        foreach ($token in @(
+            'internal static class BundledRuntime',
+            'WeatherLauncher.Resources.WeatherWorker.ps1',
+            'WeatherLauncher.Resources.ChinaRegionCatalog.json',
+            'TryGetWorkerScript',
+            'TryGetCatalogPath',
+            'Path.Combine(localAppData, "PaperWeatherWidget", "runtime", GetRuntimeVersion())'
+        )) {
+            $launcherText | Should Match ([regex]::Escape($token))
+        }
+        foreach ($token in @(
+            '[switch]$SingleExe',
+            '/resource:$workerResource,WeatherLauncher.Resources.WeatherWorker.ps1',
+            '/resource:$catalogResource,WeatherLauncher.Resources.ChinaRegionCatalog.json',
+            'if (-not $SingleExe)'
+        )) {
+            $buildText | Should Match ([regex]::Escape($token))
+        }
+        $singleBuildText | Should Match ([regex]::Escape('PaperWeatherWidget-v$Version-win-x64.exe'))
+        $singleBuildText | Should Match ([regex]::Escape('-SingleExe'))
+    }
     It 'keeps WPF out of the PowerShell worker' {
         $workerText = Get-Content -LiteralPath $workerPath -Raw
         $workerText | Should Not Match 'PresentationFramework'
