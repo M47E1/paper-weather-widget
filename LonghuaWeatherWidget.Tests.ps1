@@ -163,6 +163,32 @@ Describe 'Thin CLR launcher contracts' {
         $workerText | Should Not Match 'XamlReader'
     }
 
+    It 'wires the v3 liquid glass backdrop without changing worker scope' {
+        $glassPath = Join-Path $launcherRoot 'GlassEffects.cs'
+        Test-Path -LiteralPath $glassPath | Should Be $true
+        $glassText = Get-Content -LiteralPath $glassPath -Raw
+        $mainWindowText = Get-Content -LiteralPath (Join-Path $launcherRoot 'MainWindow.xaml.cs') -Raw
+        $buildText = Get-Content -LiteralPath (Join-Path $launcherRoot 'build-launcher.ps1') -Raw
+        foreach ($token in @(
+            'TryEnableAcrylicBackdrop',
+            'EnableAcrylicBlurBehind',
+            'DefaultTint = 0x66F5F9FAu',
+            'DwmSetWindowAttribute'
+        )) {
+            $glassText | Should Match ([regex]::Escape($token))
+        }
+        foreach ($token in @(
+            'SourceInitialized += OnWindowSourceInitialized',
+            'GlassEffects.TryEnableAcrylicBackdrop(this)',
+            'BuildGlassSheenOverlay',
+            'GlassRootTint',
+            'ToGlassTint'
+        )) {
+            $mainWindowText | Should Match ([regex]::Escape($token))
+        }
+        $buildText | Should Match ([regex]::Escape("(Join-Path `$launcherRoot 'GlassEffects.cs')"))
+    }
+
     It 'uses stdout JSON IPC and Dispatcher UI patching in the launcher' {
         $mainWindowText = Get-Content -LiteralPath (Join-Path $launcherRoot 'MainWindow.xaml.cs') -Raw
         $mainWindowText | Should Match 'RedirectStandardOutput = true'

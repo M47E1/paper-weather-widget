@@ -130,6 +130,16 @@ namespace WeatherLauncher
         private const string ColorSurface = "#FFFFFFFF";
         private const string ColorShell = "#EEFFFFFF";
         private const string ColorBorder = "#33D8D4C8";
+        // v3.0.0 liquid-glass palette (translucent whites layered over the
+        // acrylic backdrop, or over the paper gradient as fallback).
+        private const string GlassSurface = "#59FFFFFF";
+        private const string GlassShell = "#4DFFFFFF";
+        private const string GlassSubtle = "#40FFFFFF";
+        private const string GlassBorder = "#80FFFFFF";
+        private const string GlassBorderSoft = "#33FFFFFF";
+        private const string GlassRootTint = "#59FAF9F5";
+        private const string GlassRootTintMid = "#40F3F1EA";
+        private bool glassBackdropActive;
         private const int SnapshotStaleHours = 24;
         private bool snapshotWeatherVisible;
         private bool liveWeatherApplied;
@@ -245,8 +255,18 @@ namespace WeatherLauncher
             ApplyInitialSettingsFromDisk();
             SetLoadingState();
 
+            SourceInitialized += OnWindowSourceInitialized;
             ContentRendered += OnContentRendered;
             Closing += OnClosing;
+        }
+
+        private void OnWindowSourceInitialized(object sender, EventArgs e)
+        {
+            glassBackdropActive = GlassEffects.TryEnableAcrylicBackdrop(this);
+            if (glassBackdropActive && rootBorder != null)
+            {
+                rootBorder.Background = MakeGradient(GlassRootTint, GlassRootTintMid, GlassRootTint);
+            }
         }
 
         private void ConfigureWindow()
@@ -286,6 +306,7 @@ namespace WeatherLauncher
 
             shellPanel = new Grid();
             rootLayer.Children.Add(shellPanel);
+            rootLayer.Children.Add(BuildGlassSheenOverlay());
             rootLayer.Children.Add(BuildDragEdgeZone(HorizontalAlignment.Left, VerticalAlignment.Stretch, SpaceMd, Double.NaN));
             rootLayer.Children.Add(BuildDragEdgeZone(HorizontalAlignment.Right, VerticalAlignment.Stretch, SpaceMd, Double.NaN));
             rootLayer.Children.Add(BuildDragEdgeZone(HorizontalAlignment.Stretch, VerticalAlignment.Bottom, Double.NaN, SpaceMd));
@@ -323,16 +344,38 @@ namespace WeatherLauncher
             return zone;
         }
 
+        private UIElement BuildGlassSheenOverlay()
+        {
+            // Specular top light + 1px inner highlight ring - the two cues that
+            // read as "curved glass". Non-interactive so all hit testing is preserved.
+            var sheen = new Border();
+            sheen.IsHitTestVisible = false;
+            sheen.CornerRadius = new CornerRadius(RadiusXl - 1);
+            sheen.Margin = new Thickness(-SpaceMd + 1);
+            sheen.BorderBrush = BrushFrom("#59FFFFFF");
+            sheen.BorderThickness = new Thickness(1);
+            var sheenBrush = new LinearGradientBrush();
+            sheenBrush.StartPoint = new Point(0.3, 0);
+            sheenBrush.EndPoint = new Point(0.6, 1);
+            sheenBrush.GradientStops.Add(new GradientStop(ColorFrom("#38FFFFFF"), 0.0));
+            sheenBrush.GradientStops.Add(new GradientStop(ColorFrom("#14FFFFFF"), 0.28));
+            sheenBrush.GradientStops.Add(new GradientStop(ColorFrom("#00FFFFFF"), 0.45));
+            sheenBrush.GradientStops.Add(new GradientStop(ColorFrom("#00FFFFFF"), 0.9));
+            sheenBrush.GradientStops.Add(new GradientStop(ColorFrom("#12FFFFFF"), 1.0));
+            sheen.Background = sheenBrush;
+            Panel.SetZIndex(sheen, 5);
+            return sheen;
+        }
         private void ApplyDeferredVisualEffects()
         {
             if (rootBorder != null && rootBorder.Effect == null)
             {
                 rootBorder.Effect = new System.Windows.Media.Effects.DropShadowEffect
                 {
-                    Color = ColorFrom("#D8D4C8"),
-                    BlurRadius = 18,
-                    ShadowDepth = 4,
-                    Opacity = 0.18
+                    Color = ColorFrom("#33302A"),
+                    BlurRadius = 26,
+                    ShadowDepth = 6,
+                    Opacity = 0.28
                 };
             }
             if (iconShell != null && iconShell.Effect == null)
@@ -377,7 +420,7 @@ namespace WeatherLauncher
             statusBadge.VerticalAlignment = VerticalAlignment.Center;
             statusBadge.Padding = new Thickness(SpaceSm, 0, SpaceSm, 0);
             statusBadge.Margin = new Thickness(6, 0, 0, 0);
-            statusBadge.Background = BrushFrom(ColorShell);
+            statusBadge.Background = BrushFrom(GlassShell);
             statusBadge.BorderBrush = Brushes.Transparent;
             statusBadge.BorderThickness = new Thickness(0);
             statusBlock = Text(UiStateLabel("refreshing"), 10.5, ColorDanger, FontWeights.SemiBold);
@@ -423,8 +466,8 @@ namespace WeatherLauncher
             statusShell.CornerRadius = new CornerRadius(RadiusSm);
             statusShell.Padding = new Thickness(SpaceSm + 1, SpaceXs + 1, SpaceSm + 1, SpaceXs + 1);
             statusShell.Margin = new Thickness(0, SpaceMd - 2, 0, SpaceSm);
-            statusShell.Background = BrushFrom(ColorShell);
-            statusShell.BorderBrush = BrushFrom(ColorBorder);
+            statusShell.Background = BrushFrom(GlassShell);
+            statusShell.BorderBrush = BrushFrom(GlassBorderSoft);
             statusShell.BorderThickness = new Thickness(1);
             statusShell.Cursor = Cursors.Hand;
             statusShell.Focusable = true;
@@ -467,8 +510,8 @@ namespace WeatherLauncher
             conditionCard.CornerRadius = new CornerRadius(RadiusLg);
             conditionCard.Padding = new Thickness(SpaceMd);
             conditionCard.Margin = new Thickness(0, 0, 0, SpaceSm - 2);
-            conditionCard.Background = BrushFrom(ColorSurface);
-            conditionCard.BorderBrush = BrushFrom("#55E8E6DC");
+            conditionCard.Background = BrushFrom(GlassSurface);
+            conditionCard.BorderBrush = BrushFrom(GlassBorder);
             conditionCard.BorderThickness = new Thickness(1);
             Grid.SetRow(conditionCard, 2);
 
@@ -501,7 +544,7 @@ namespace WeatherLauncher
             iconShell.CornerRadius = new CornerRadius(RadiusIcon + 4);
             iconShell.HorizontalAlignment = HorizontalAlignment.Center;
             iconShell.VerticalAlignment = VerticalAlignment.Center;
-            iconShell.Background = MakeGradient("#FFFFFDFC", ColorWarm, ColorSurface);
+            iconShell.Background = MakeGradient("#66FFFFFF", GlassBorderSoft, GlassSurface);
             iconBlock = Text(((char)0x2601).ToString(), 40, ColorAccent, FontWeights.Normal);
             iconBlock.HorizontalAlignment = HorizontalAlignment.Center;
             iconBlock.VerticalAlignment = VerticalAlignment.Center;
@@ -553,8 +596,8 @@ namespace WeatherLauncher
             settingsPanel.CornerRadius = new CornerRadius(RadiusLg);
             settingsPanel.Padding = new Thickness(SpaceMd - 2);
             settingsPanel.Margin = new Thickness(0, 0, 0, SpaceSm);
-            settingsPanel.Background = BrushFrom(ColorSurface);
-            settingsPanel.BorderBrush = BrushFrom("#55E8E6DC");
+            settingsPanel.Background = BrushFrom(GlassSurface);
+            settingsPanel.BorderBrush = BrushFrom(GlassBorder);
             settingsPanel.BorderThickness = new Thickness(1);
             settingsPanel.Visibility = Visibility.Collapsed;
             Grid.SetRow(settingsPanel, 4);
@@ -664,8 +707,8 @@ namespace WeatherLauncher
             combo.VerticalContentAlignment = VerticalAlignment.Center;
             combo.DisplayMemberPath = "Text";
             combo.Foreground = BrushFrom(ColorInk);
-            combo.Background = BrushFrom(ColorPaper);
-            combo.BorderBrush = BrushFrom(ColorBorder);
+            combo.Background = BrushFrom(GlassShell);
+            combo.BorderBrush = BrushFrom(GlassBorderSoft);
             combo.BorderThickness = new Thickness(1);
             combo.MaxDropDownHeight = 220;
             combo.Template = SettingsComboTemplate();
@@ -810,7 +853,7 @@ namespace WeatherLauncher
             button.FontSize = 12;
             button.FontWeight = FontWeights.SemiBold;
             button.Foreground = BrushFrom(ColorInk);
-            button.Background = BrushFrom(ColorPaper);
+            button.Background = BrushFrom(GlassShell);
             button.BorderBrush = Brushes.Transparent;
             button.BorderThickness = new Thickness(0);
             button.HorizontalContentAlignment = HorizontalAlignment.Center;
@@ -934,8 +977,8 @@ namespace WeatherLauncher
             card.CornerRadius = new CornerRadius(RadiusSm);
             card.Padding = new Thickness(SpaceSm + 1, SpaceXs + 1, SpaceSm + 1, SpaceXs + 1);
             card.Margin = new Thickness(column == 0 ? 0 : SpaceXs, 0, column == 0 ? SpaceXs : 0, SpaceXs + 1);
-            card.Background = BrushFrom("#FFFAF9F5");
-            card.BorderBrush = BrushFrom("#44E8E6DC");
+            card.Background = BrushFrom(GlassSubtle);
+            card.BorderBrush = BrushFrom(GlassBorderSoft);
             card.BorderThickness = new Thickness(1);
             Grid.SetRow(card, row);
             Grid.SetColumn(card, column);
@@ -994,11 +1037,11 @@ namespace WeatherLauncher
             template.VisualTree = border;
 
             var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Border.BackgroundProperty, BrushFrom(ColorShell), "ChromeButtonRoot"));
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, BrushFrom(GlassShell), "ChromeButtonRoot"));
             template.Triggers.Add(hover);
 
             var pressed = new Trigger { Property = ButtonBase.IsPressedProperty, Value = true };
-            pressed.Setters.Add(new Setter(Border.BackgroundProperty, BrushFrom(ColorWarm), "ChromeButtonRoot"));
+            pressed.Setters.Add(new Setter(Border.BackgroundProperty, BrushFrom("#66FFFFFF"), "ChromeButtonRoot"));
             template.Triggers.Add(pressed);
 
             return template;
@@ -2194,8 +2237,8 @@ namespace WeatherLauncher
             drawerHandle.Width = CollapsedWidth;
             drawerHandle.Height = CollapsedHeight;
             drawerHandle.CornerRadius = String.Equals(drawerEdge, "Left", StringComparison.OrdinalIgnoreCase) ? new CornerRadius(0, RadiusLg, RadiusLg, 0) : new CornerRadius(RadiusLg, 0, 0, RadiusLg);
-            drawerHandle.Background = BrushFrom(ColorShell);
-            drawerHandle.BorderBrush = BrushFrom("#55D8D4C8");
+            drawerHandle.Background = BrushFrom(GlassShell);
+            drawerHandle.BorderBrush = BrushFrom(GlassBorder);
             drawerHandle.BorderThickness = new Thickness(1);
             drawerHandle.ContextMenu = BuildWindowContextMenu();
             drawerHandle.Cursor = Cursors.Hand;
@@ -2952,7 +2995,9 @@ namespace WeatherLauncher
         private void ApplyConditionVisual(ConditionVisual visual)
         {
             if (visual == null) { visual = ResolveConditionVisual(null, null, null); }
-            rootBorder.Background = MakeGradient(ColorPaper, NonEmpty(visual.GradientMiddle, ColorWarm), ColorSurface);
+            rootBorder.Background = glassBackdropActive
+                ? MakeGradient(GlassRootTint, ToGlassTint(NonEmpty(visual.GradientMiddle, ColorWarm)), GlassRootTintMid)
+                : MakeGradient(ColorPaper, NonEmpty(visual.GradientMiddle, ColorWarm), ColorSurface);
             iconBlock.Text = NonEmpty(visual.Icon, ((char)0x2601).ToString());
             iconBlock.Foreground = BrushFrom(NonEmpty(visual.IconColor, ColorAccent));
         }
@@ -3224,6 +3269,21 @@ namespace WeatherLauncher
             return (Color)ColorConverter.ConvertFromString(color);
         }
 
+        private static string ToGlassTint(string color)
+        {
+            // Re-emit any palette color as a low-alpha tint so condition moods
+            // (rain, thunderstorm, alert) still color the glass without killing the blur.
+            try
+            {
+                var parsed = ColorFrom(color);
+                return String.Format(CultureInfo.InvariantCulture, "#40{0:X2}{1:X2}{2:X2}", parsed.R, parsed.G, parsed.B);
+            }
+            catch
+            {
+                return GlassRootTintMid;
+            }
+        }
+
         private static Brush MakeGradient(string start, string middle, string end)
         {
             var brush = new LinearGradientBrush();
@@ -3362,6 +3422,45 @@ namespace WeatherLauncher
             }
 
             return value.Value.ToString("F" + digits, CultureInfo.InvariantCulture) + unit;
+        }
+
+        private static string JoinCommandLineArguments(IEnumerable<string> arguments)
+        {
+            var parts = new List<string>();
+            foreach (var argument in arguments)
+            {
+                parts.Add(QuoteCommandLineArgument(argument));
+            }
+            return String.Join(" ", parts.ToArray());
+        }
+
+        private static string QuoteCommandLineArgument(string value)
+        {
+            if (String.IsNullOrEmpty(value)) { return "\"\""; }
+            var builder = new StringBuilder();
+            builder.Append('"');
+            var backslashes = 0;
+            foreach (var ch in value)
+            {
+                if (ch == '\\')
+                {
+                    backslashes++;
+                    continue;
+                }
+                if (ch == '"')
+                {
+                    builder.Append('\\', backslashes * 2 + 1);
+                    builder.Append('"');
+                    backslashes = 0;
+                    continue;
+                }
+                builder.Append('\\', backslashes);
+                backslashes = 0;
+                builder.Append(ch);
+            }
+            builder.Append('\\', backslashes * 2);
+            builder.Append('"');
+            return builder.ToString();
         }
     }
 }

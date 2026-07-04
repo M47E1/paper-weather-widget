@@ -102,6 +102,7 @@ foreach ($reference in $references) {
 $sources = @(
     (Join-Path $launcherRoot 'WeatherLauncher.cs'),
     (Join-Path $launcherRoot 'App.xaml.cs'),
+    (Join-Path $launcherRoot 'GlassEffects.cs'),
     (Join-Path $launcherRoot 'MainWindow.xaml.cs')
 )
 
