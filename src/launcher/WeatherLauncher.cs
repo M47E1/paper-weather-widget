@@ -302,18 +302,6 @@ namespace WeatherLauncher
             using (var stream = assembly.GetManifestResourceStream(resourceName))
             {
                 if (stream == null) { return; }
-                if (File.Exists(destinationPath))
-                {
-                    try
-                    {
-                        var existing = new FileInfo(destinationPath);
-                        if (existing.Length == stream.Length) { return; }
-                    }
-                    catch
-                    {
-                    }
-                }
-
                 var tempPath = destinationPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 using (var output = File.Create(tempPath))
                 {
@@ -354,21 +342,6 @@ namespace WeatherLauncher
     {
         public static string FindRepositoryRoot()
         {
-            var candidates = new[]
-            {
-                AppDomain.CurrentDomain.BaseDirectory,
-                Environment.CurrentDirectory
-            };
-
-            foreach (var candidate in candidates)
-            {
-                var root = WalkForRepoRoot(candidate);
-                if (!String.IsNullOrWhiteSpace(root))
-                {
-                    return root;
-                }
-            }
-
             var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
             return String.IsNullOrWhiteSpace(baseDirectory)
                 ? Environment.CurrentDirectory
@@ -393,13 +366,10 @@ namespace WeatherLauncher
             }
 
             var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-            var currentDirectory = Environment.CurrentDirectory;
             var candidates = new[]
             {
                 Path.Combine(baseDirectory, "WeatherWorker.ps1"),
-                Path.Combine(baseDirectory, "src", "worker", "WeatherWorker.ps1"),
-                Path.Combine(currentDirectory, "src", "worker", "WeatherWorker.ps1"),
-                Path.Combine(FindRepositoryRoot(), "src", "worker", "WeatherWorker.ps1")
+                Path.Combine(baseDirectory, "src", "worker", "WeatherWorker.ps1")
             };
 
             foreach (var candidate in candidates)
@@ -420,15 +390,23 @@ namespace WeatherLauncher
                 return Path.GetFullPath(explicitPath);
             }
 
-            return Path.Combine(FindRepositoryRoot(), "reports", "startup-benchmark.log");
+            return Path.Combine(GetLocalAppDataRoot(), "reports", "startup-benchmark.log");
         }
 
         public static string FindSettingsFile()
         {
-            return Path.Combine(FindRepositoryRoot(), "LonghuaWeatherWidget.settings.json");
+            var settingsPath = Path.Combine(GetLocalAppDataRoot(), "LonghuaWeatherWidget.settings.json");
+            if (File.Exists(settingsPath)) { return settingsPath; }
+            var legacySettingsPath = Path.Combine(FindRepositoryRoot(), "LonghuaWeatherWidget.settings.json");
+            return File.Exists(legacySettingsPath) ? legacySettingsPath : settingsPath;
         }
 
         public static string FindWeatherSnapshot()
+        {
+            return Path.Combine(GetLocalAppDataRoot(), "weather-snapshot.json");
+        }
+
+        private static string GetLocalAppDataRoot()
         {
             var localAppData = Environment.GetEnvironmentVariable("LOCALAPPDATA");
             if (String.IsNullOrWhiteSpace(localAppData))
@@ -440,28 +418,7 @@ namespace WeatherLauncher
                 localAppData = Path.GetTempPath();
             }
 
-            return Path.Combine(localAppData, "PaperWeatherWidget", "weather-snapshot.json");
-        }
-
-        private static string WalkForRepoRoot(string start)
-        {
-            if (String.IsNullOrWhiteSpace(start))
-            {
-                return String.Empty;
-            }
-
-            var directory = new DirectoryInfo(Path.GetFullPath(start));
-            while (directory != null)
-            {
-                if (File.Exists(Path.Combine(directory.FullName, "LonghuaWeatherWidget.ps1")))
-                {
-                    return directory.FullName;
-                }
-
-                directory = directory.Parent;
-            }
-
-            return String.Empty;
+            return Path.Combine(localAppData, "PaperWeatherWidget");
         }
     }
 

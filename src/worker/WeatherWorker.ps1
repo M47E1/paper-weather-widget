@@ -10,7 +10,8 @@ param(
     [switch]$FixtureWeatherSuccess,
     [switch]$AllowFixtureSnapshotWrite,
     [switch]$StartupTrace,
-    [string]$StartupTracePath = ''
+    [string]$StartupTracePath = '',
+    [int]$ParentProcessId = 0
 )
 
 $script:WorkerTraceStartedAtUtc = [DateTime]::UtcNow
@@ -166,7 +167,7 @@ function Write-WorkerError {
     })
 }
 
-function Get-PersistentWeatherSnapshotPath {
+function Get-PaperWeatherDataRoot {
     $localAppData = $env:LOCALAPPDATA
     if ([string]::IsNullOrWhiteSpace($localAppData)) {
         try { $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData) } catch {}
@@ -174,8 +175,17 @@ function Get-PersistentWeatherSnapshotPath {
     if ([string]::IsNullOrWhiteSpace($localAppData)) {
         $localAppData = [IO.Path]::GetTempPath()
     }
-    return (Join-Path (Join-Path $localAppData 'PaperWeatherWidget') 'weather-snapshot.json')
+    return (Join-Path $localAppData 'PaperWeatherWidget')
 }
+
+function Get-PersistentWeatherSnapshotPath {
+    return (Join-Path (Get-PaperWeatherDataRoot) 'weather-snapshot.json')
+}
+
+function Get-WorkerSettingsPath {
+    return (Join-Path (Get-PaperWeatherDataRoot) 'LonghuaWeatherWidget.settings.json')
+}
+
 function Resolve-AppRoot {
     param([string]$RequestedRoot)
 
@@ -188,18 +198,11 @@ function Resolve-AppRoot {
         } catch {}
     }
 
-    $candidates = @(
-        (Get-Location).Path,
-        (Split-Path -Parent $PSScriptRoot),
-        (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-    )
-
-    foreach ($candidate in $candidates) {
-        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
         try {
-            $full = [IO.Path]::GetFullPath($candidate)
-            if (Test-Path -LiteralPath (Join-Path $full 'LonghuaWeatherWidget.ps1') -PathType Leaf) {
-                return $full
+            $scriptRoot = [IO.Path]::GetFullPath($PSScriptRoot)
+            if (Test-Path -LiteralPath $scriptRoot -PathType Container) {
+                return $scriptRoot
             }
         } catch {}
     }
@@ -208,8 +211,8 @@ function Resolve-AppRoot {
 }
 
 $script:AppRoot = Resolve-AppRoot -RequestedRoot $AppRoot
-$script:SettingsPath = Join-Path $script:AppRoot 'LonghuaWeatherWidget.settings.json'
-$script:LegacyScriptPath = Join-Path $script:AppRoot 'LonghuaWeatherWidget.ps1'
+$script:SettingsPath = Get-WorkerSettingsPath
+$script:LegacySettingsPath = Join-Path $script:AppRoot 'LonghuaWeatherWidget.settings.json'
 Write-WorkerStartupTrace 'Settings path resolved'
 $script:DefaultProvinceKey = '440000'
 $script:DefaultCityKey = '440300'
@@ -222,6 +225,7 @@ $script:SelectedForecastSlotKey = 'Day0'
 $script:ForecastDayCount = 14
 $script:ForecastHourCount = 336
 $script:WeatherRequestTimeoutMs = 6000
+$script:RawWeatherCacheMaxAgeMinutes = 30
 $script:UiSmokeMode = $false
 $script:RefreshOptions = @(60, 3600, 86400)
 $script:RefreshSeconds = if ($script:RefreshOptions -contains [int]$PollSeconds) { [int]$PollSeconds } else { 60 }
@@ -233,6 +237,7 @@ $script:SnapshotPath = Get-PersistentWeatherSnapshotPath
 Write-WorkerStartupTrace ('Fixture flag resolved: ' + [string]$script:FixtureWeatherSuccess)
 $script:CommandFile = $CommandFile
 $script:SessionId = $SessionId
+$script:ParentProcessId = [int]$ParentProcessId
 $script:CommandFilePosition = 0L
 $script:ProcessedCommandIds = @{}
 $script:WeatherSnapshotCache = @{}
@@ -459,6 +464,9 @@ function Invoke-WeatherRefresh {
             }
         } finally {
             $script:WeatherRefreshInProgress = $false
+            if ($Reason -ne 'auto') {
+                $script:NextAutoRefreshAt = (Get-Date).AddSeconds($script:RefreshSeconds)
+            }
         }
     } while ($script:PendingWeatherRefresh)
 }
@@ -582,8 +590,7 @@ function Resolve-StaticLocationCatalogPath {
     $candidates = @(
         (Join-Path $script:AppRoot 'ChinaRegionCatalog.json'),
         (Join-Path $PSScriptRoot 'ChinaRegionCatalog.json'),
-        (Join-Path (Join-Path $script:AppRoot 'src\worker') 'ChinaRegionCatalog.json'),
-        (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) 'worker') 'ChinaRegionCatalog.json')
+        (Join-Path (Join-Path $script:AppRoot 'src\worker') 'ChinaRegionCatalog.json')
     )
     foreach ($candidate in $candidates) {
         if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
@@ -657,31 +664,8 @@ function Import-StaticLocationCatalog {
 function Import-LocationCatalog {
     param([switch]$SkipLegacyExtraction)
 
-    if ($script:LocationCatalogImported -and -not $SkipLegacyExtraction) { Ensure-DefaultForecastSlotDefinitions; return }
-    if (-not $SkipLegacyExtraction -and (Import-StaticLocationCatalog)) { Ensure-DefaultForecastSlotDefinitions; return }
-    if (-not $SkipLegacyExtraction -and (Test-Path -LiteralPath $script:LegacyScriptPath -PathType Leaf)) {
-        try {
-            $text = Get-Content -LiteralPath $script:LegacyScriptPath -Raw
-            $slotStart = $text.IndexOf('$script:ForecastSlotDefinitions = @(', [StringComparison]::Ordinal)
-            $slotEnd = $text.IndexOf('function New-District', [StringComparison]::Ordinal)
-            if ($slotStart -ge 0 -and $slotEnd -gt $slotStart) {
-                Invoke-Expression $text.Substring($slotStart, $slotEnd - $slotStart)
-            }
-            $start = $text.IndexOf('function New-District', [StringComparison]::Ordinal)
-            $end = $text.IndexOf('$script:Text = @{', [StringComparison]::Ordinal)
-            if ($start -ge 0 -and $end -gt $start) {
-                $catalogScript = $text.Substring($start, $end - $start)
-                Invoke-Expression $catalogScript
-                if ($null -ne $script:Provinces -and @($script:Provinces).Count -gt 0) {
-                    $script:LocationCatalogImported = $true
-                    $script:UsingMinimalCatalog = $false
-                    return
-                }
-            }
-        } catch {
-            [Console]::Error.WriteLine('[Worker] catalog import failed: ' + $_.Exception.Message)
-        }
-    }
+    if ($script:LocationCatalogImported) { Ensure-DefaultForecastSlotDefinitions; return }
+    if (Import-StaticLocationCatalog) { Ensure-DefaultForecastSlotDefinitions; return }
 
     Ensure-DefaultForecastSlotDefinitions
 
@@ -720,9 +704,9 @@ function Import-LocationCatalog {
 
 function Ensure-FullLocationCatalog {
     if ($script:LocationCatalogImported) { return }
-    Write-WorkerStartupTrace 'Before legacy catalog extraction/import'
+    Write-WorkerStartupTrace 'Before static catalog import'
     Import-LocationCatalog
-    Write-WorkerStartupTrace 'After legacy catalog extraction/import'
+    Write-WorkerStartupTrace 'After static catalog import'
 }
 
 function Get-ProtocolLocationKey {
@@ -1008,13 +992,24 @@ function Get-LocationTitle {
     return '{0} - {1} - {2}' -f (Get-DisplayName $province), (Get-DisplayName $city), (Get-DisplayName $district)
 }
 
+function Resolve-SettingsReadPath {
+    if (Test-Path -LiteralPath $script:SettingsPath -PathType Leaf) {
+        return $script:SettingsPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:LegacySettingsPath) -and (Test-Path -LiteralPath $script:LegacySettingsPath -PathType Leaf)) {
+        return $script:LegacySettingsPath
+    }
+    return ''
+}
+
 function Load-Settings {
-    if (-not (Test-Path -LiteralPath $script:SettingsPath -PathType Leaf)) {
+    $settingsReadPath = Resolve-SettingsReadPath
+    if ([string]::IsNullOrWhiteSpace($settingsReadPath)) {
         return
     }
 
     try {
-        $settings = Get-Content -LiteralPath $script:SettingsPath -Raw | ConvertFrom-Json
+        $settings = Get-Content -LiteralPath $settingsReadPath -Raw | ConvertFrom-Json
         if (@('zh', 'en') -contains $settings.Language) {
             $script:Language = [string]$settings.Language
         }
@@ -1592,6 +1587,17 @@ function Save-WeatherSnapshotCache {
     }
 }
 
+function Test-RawWeatherCacheFresh {
+    param([object]$Entry)
+
+    if ($null -eq $Entry -or $null -eq $Entry.FetchedAt) { return $false }
+    try {
+        return (((Get-Date) - [DateTime]$Entry.FetchedAt).TotalMinutes -le [double]$script:RawWeatherCacheMaxAgeMinutes)
+    } catch {
+        return $false
+    }
+}
+
 function Copy-SnapshotPayloadForPersistence {
     param([object]$Snapshot)
 
@@ -1831,6 +1837,48 @@ function Get-PersistentSnapshotDiagnosticsPayload {
     $diagnostics.skipReason = $null
     return $diagnostics
 }
+
+function Get-PersistentWeatherSnapshot {
+    $diagnostics = Get-PersistentSnapshotDiagnosticsPayload
+    if (-not [bool]$diagnostics.valid -or -not [bool]$diagnostics.matchesCurrentLocation) {
+        return $null
+    }
+
+    $snapshotPath = [string]$diagnostics.path
+    if ([string]::IsNullOrWhiteSpace($snapshotPath) -or -not (Test-Path -LiteralPath $snapshotPath -PathType Leaf)) {
+        return $null
+    }
+
+    try {
+        $envelope = ([IO.File]::ReadAllText($snapshotPath, [Text.Encoding]::UTF8) | ConvertFrom-Json)
+        $payload = Get-PropertyValue -Object $envelope -Name 'payload' -Default $null
+        if ($null -eq $payload) { return $null }
+
+        $copy = Copy-SnapshotPayloadForPersistence -Snapshot $payload
+        $source = [string](Get-SnapshotFieldValue -Snapshot $envelope -Names @('source'))
+        $savedAt = [string](Get-SnapshotFieldValue -Snapshot $envelope -Names @('savedAt'))
+        $locationKey = [string](Get-SnapshotFieldValue -Snapshot $envelope -Names @('locationKey', 'location_key'))
+        $locationLabel = [string](Get-SnapshotFieldValue -Snapshot $envelope -Names @('locationLabel', 'location'))
+        $copy['fromSnapshot'] = $true
+        $copy['from_snapshot'] = $true
+        $copy['fromCache'] = $true
+        $copy['from_cache'] = $true
+        $copy['source'] = $(if ([string]::IsNullOrWhiteSpace($source)) { 'snapshot' } else { $source })
+        $copy['locationKey'] = $locationKey
+        $copy['location_key'] = $locationKey
+        if (-not [string]::IsNullOrWhiteSpace($locationLabel)) {
+            $copy['location'] = $locationLabel
+            $copy['locationLabel'] = $locationLabel
+        }
+        $copy['forecastSlots'] = Get-ForecastSlotsPayload
+        $copy['updated'] = ('{0} {1} | {2}' -f $(if ($script:Language -eq 'zh') { T '57yT5a2Y' } else { 'Cached' }), $(if ([string]::IsNullOrWhiteSpace($savedAt)) { (Get-Date -Format 'HH:mm') } else { ([DateTime]::Parse($savedAt)).ToLocalTime().ToString('HH:mm') }), $copy['source'])
+        return $copy
+    } catch {
+        [Console]::Error.WriteLine('[Worker] persistent snapshot fallback failed: ' + $_.Exception.Message)
+        return $null
+    }
+}
+
 function Get-CachedWeatherSnapshot {
     param([string]$LocationKey)
 
@@ -1975,6 +2023,12 @@ function Get-WeatherSnapshot {
             $script:LatestWeatherLocationKey = $locationKey
             return $cache
         }
+        $persistent = Get-PersistentWeatherSnapshot
+        if ($null -ne $persistent) {
+            $script:LatestWeatherSnapshot = $persistent
+            $script:LatestWeatherLocationKey = $locationKey
+            return $persistent
+        }
         throw ('{0}; wttr fallback failed: {1}' -f $openMeteoError, $_.Exception.Message)
     }
 }
@@ -2047,11 +2101,11 @@ function Process-WorkerCommand {
                 Set-WorkerForecastSlot -SlotKey ([string](Get-PropertyValue -Object $payload -Name 'slotKey'))
                 Write-SettingsEvent -Id $id
                 $locationKey = $(if ($script:FixtureWeatherSuccess) { Get-ProtocolLocationKey } else { Get-SelectedLocationKey })
-                if ($script:RawWeatherCache.ContainsKey($locationKey) -and $script:RawWeatherCache[$locationKey].Source -eq 'Open-Meteo') {
+                if ($script:RawWeatherCache.ContainsKey($locationKey) -and $script:RawWeatherCache[$locationKey].Source -eq 'Open-Meteo' -and (Test-RawWeatherCacheFresh -Entry $script:RawWeatherCache[$locationKey])) {
                     $request = Start-WeatherRequestContext
                     Write-CommandAck -Id $id -CommandType $type -RequestId $request.RequestId
                     $rawEntry = $script:RawWeatherCache[$locationKey]
-                    $snapshot = ConvertTo-OpenMeteoSnapshot -Weather $rawEntry.Weather -FromCache:$false
+                    $snapshot = ConvertTo-OpenMeteoSnapshot -Weather $rawEntry.Weather -FromCache:$true
                     Save-WeatherSnapshotCache -LocationKey $locationKey -Snapshot $snapshot -RawWeather $rawEntry.Weather -Source $rawEntry.Source
                     Save-PersistentWeatherSnapshot -Snapshot $snapshot
                     if (Test-WeatherRequestIsCurrent -Request $request) {
@@ -2133,6 +2187,20 @@ function Process-NewCommandLines {
     }
 }
 
+function Test-IpcOwnerAlive {
+    if (-not [string]::IsNullOrWhiteSpace($script:CommandFile) -and -not (Test-Path -LiteralPath $script:CommandFile -PathType Leaf)) {
+        return $false
+    }
+    if ([int]$script:ParentProcessId -gt 0) {
+        try {
+            Get-Process -Id ([int]$script:ParentProcessId) -ErrorAction Stop | Out-Null
+        } catch {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Invoke-IpcSmoke {
     Write-ProtocolEvent -Type 'status' -Payload ([ordered]@{ phase = 'ready'; message = 'Worker ready'; sessionId = $script:SessionId })
     if ($script:FixtureWeatherSuccess) {
@@ -2144,13 +2212,13 @@ function Invoke-IpcSmoke {
     Process-WorkerCommand -Command ([pscustomobject]@{ protocol = 1; id = 'smoke-status'; sessionId = $script:SessionId; type = 'status'; payload = [pscustomobject]@{} })
 }
 if ($script:FixtureWeatherSuccess) {
-    Write-WorkerStartupTrace 'Before legacy catalog extraction/import'
+    Write-WorkerStartupTrace 'Before static catalog import'
     Import-LocationCatalog -SkipLegacyExtraction
-    Write-WorkerStartupTrace 'After legacy catalog extraction/import skipped fixture fast path'
+    Write-WorkerStartupTrace 'After static catalog import fixture fast path'
 } else {
-    Write-WorkerStartupTrace 'Before legacy catalog extraction/import'
+    Write-WorkerStartupTrace 'Before static catalog import'
     Import-LocationCatalog
-    Write-WorkerStartupTrace 'After legacy catalog extraction/import'
+    Write-WorkerStartupTrace 'After static catalog import'
 }
 Write-WorkerStartupTrace 'Before settings load'
 Load-Settings
@@ -2189,6 +2257,10 @@ if ($script:IpcModeActive) {
 
     Write-WorkerStartupTrace 'IPC loop entered'
     while ($true) {
+        if (-not (Test-IpcOwnerAlive)) {
+            Write-WorkerStartupTrace 'IPC owner gone; worker exiting'
+            return
+        }
         Process-NewCommandLines
         if ((Get-Date) -ge $script:NextAutoRefreshAt) {
             Invoke-WeatherRefresh -Reason 'auto'

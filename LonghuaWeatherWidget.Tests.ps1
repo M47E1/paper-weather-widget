@@ -124,9 +124,11 @@ Describe 'Thin CLR launcher contracts' {
 
     It 'supports single exe embedded worker packaging' {
         Test-Path -LiteralPath (Join-Path $repoRoot 'build-single-exe-release.ps1') | Should Be $true
+        Test-Path -LiteralPath (Join-Path $repoRoot 'VERSION') | Should Be $true
         $launcherText = Get-Content -LiteralPath (Join-Path $launcherRoot 'WeatherLauncher.cs') -Raw
         $buildText = Get-Content -LiteralPath (Join-Path $launcherRoot 'build-launcher.ps1') -Raw
         $singleBuildText = Get-Content -LiteralPath (Join-Path $repoRoot 'build-single-exe-release.ps1') -Raw
+        $thinReleaseText = Get-Content -LiteralPath (Join-Path $repoRoot 'build-thinclr-release.ps1') -Raw
         foreach ($token in @(
             'internal static class BundledRuntime',
             'WeatherLauncher.Resources.WeatherWorker.ps1',
@@ -147,6 +149,10 @@ Describe 'Thin CLR launcher contracts' {
         }
         $singleBuildText | Should Match ([regex]::Escape('PaperWeatherWidget-v$Version-win-x64.exe'))
         $singleBuildText | Should Match ([regex]::Escape('-SingleExe'))
+        $singleBuildText | Should Match ([regex]::Escape('Resolve-BuildVersion'))
+        $buildText | Should Match ([regex]::Escape('Resolve-BuildVersion'))
+        $buildText | Should Match ([regex]::Escape('Assert-NoForbiddenOutputFiles'))
+        $thinReleaseText | Should Match ([regex]::Escape('Assert-NoForbiddenPackageFiles'))
     }
     It 'keeps WPF out of the PowerShell worker' {
         $workerText = Get-Content -LiteralPath $workerPath -Raw
@@ -164,6 +170,22 @@ Describe 'Thin CLR launcher contracts' {
         $mainWindowText | Should Match 'CreateNoWindow = true'
         $mainWindowText | Should Match 'Dispatcher\.BeginInvoke'
         $mainWindowText | Should Match 'ApplyWorkerPayload'
+    }
+
+    It 'pins launcher paths to the app or user data roots and escapes worker arguments' {
+        $launcherText = Get-Content -LiteralPath (Join-Path $launcherRoot 'WeatherLauncher.cs') -Raw
+        $mainWindowText = Get-Content -LiteralPath (Join-Path $launcherRoot 'MainWindow.xaml.cs') -Raw
+        $workerText = Get-Content -LiteralPath $workerPath -Raw
+        $launcherText | Should Not Match 'WalkForRepoRoot'
+        $launcherText | Should Not Match ([regex]::Escape('LonghuaWeatherWidget.ps1"))'))
+        $launcherText | Should Match ([regex]::Escape('GetLocalAppDataRoot()'))
+        $mainWindowText | Should Match ([regex]::Escape('JoinCommandLineArguments(arguments)'))
+        $mainWindowText | Should Match ([regex]::Escape('QuoteCommandLineArgument'))
+        $mainWindowText | Should Match ([regex]::Escape('"-ParentProcessId"'))
+        $workerText | Should Not Match 'Invoke-Expression'
+        $workerText | Should Not Match 'LegacyScriptPath'
+        $workerText | Should Match ([regex]::Escape('Get-WorkerSettingsPath'))
+        $workerText | Should Match ([regex]::Escape('Test-IpcOwnerAlive'))
     }
 
     It 'writes startup benchmark milestones' {
@@ -283,7 +305,7 @@ Describe 'Thin CLR launcher P0 parity contracts' {
         $mainWindowText | Should Match 'rootBorder\.MouseLeftButtonDown \+= OnWindowBorderMouseLeftButtonDown'
         $mainWindowText | Should Match 'BuildDragEdgeZone'
         $mainWindowText | Should Match 'zone\.MouseLeftButtonDown \+= OnDragHandleMouseDown'
-        $mainWindowText | Should Match 'ReferenceEquals\(e\.OriginalSource, rootBorder\)'
+        $mainWindowText | Should Match 'IsDragExcludedSource\(source\)'
     }
 }
 
@@ -322,7 +344,7 @@ Describe 'Thin CLR launcher P1 visible parity contracts' {
         $mainWindowText = Get-Content -LiteralPath (Join-Path $launcherRoot 'MainWindow.xaml.cs') -Raw
         $mainWindowText | Should Match ([regex]::Escape('LocationTitle'))
         $mainWindowText | Should Match ([regex]::Escape('statusShell.MouseLeftButtonUp += delegate { ToggleSettingsPanel(); };'))
-        $mainWindowText | Should Match 'ReferenceEquals\(e\.OriginalSource, rootBorder\)'
+        $mainWindowText | Should Match 'IsDragExcludedSource\(source\)'
     }
 
 
@@ -716,10 +738,22 @@ Describe 'Thin CLR launcher reliability hardening contracts' {
             'ApplyAck',
             'ApplyWorkerError',
             'CommandTimeout',
+            'return 45000;',
             'command["sessionId"] = sessionId'
         )) {
             $mainWindowText | Should Match ([regex]::Escape($token))
         }
+    }
+
+    It 'uses numeric region keys for defaults and example settings' {
+        $mainWindowText = Get-Content -LiteralPath (Join-Path $launcherRoot 'MainWindow.xaml.cs') -Raw
+        $example = Get-Content -LiteralPath (Join-Path $repoRoot 'LonghuaWeatherWidget.settings.example.json') -Raw | ConvertFrom-Json
+        $mainWindowText | Should Match ([regex]::Escape('var province = "440000";'))
+        $mainWindowText | Should Match ([regex]::Escape('var city = "440300";'))
+        $mainWindowText | Should Match ([regex]::Escape('var district = "440309";'))
+        [string]$example.ProvinceKey | Should Be '440000'
+        [string]$example.CityKey | Should Be '440300'
+        [string]$example.DistrictKey | Should Be '440309'
     }
 
     It 'persists window position with monitor guard' {
@@ -745,7 +779,64 @@ Describe 'Thin CLR launcher reliability hardening contracts' {
         $buildText | Should Not Match ([regex]::Escape('System.Windows.Forms.dll'))
         $buildText | Should Not Match ([regex]::Escape('System.Drawing.dll'))
     }
+
+    It 'exits IPC worker instead of falling through to polling when owner disappears' {
+        $tempRoot = Join-Path $env:TEMP ('pww-pester-owner-gone-' + [Guid]::NewGuid().ToString('N'))
+        $commandFile = Join-Path $tempRoot 'commands.jsonl'
+        $tracePath = Join-Path $tempRoot 'startup-trace.log'
+        New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+        New-Item -ItemType File -Path $commandFile -Force | Out-Null
+        $process = $null
+        try {
+            $arguments = @(
+                '-NoLogo',
+                '-NoProfile',
+                '-NonInteractive',
+                '-ExecutionPolicy',
+                'Bypass',
+                '-File',
+                ('"{0}"' -f $workerPath),
+                '-AppRoot',
+                ('"{0}"' -f $repoRoot),
+                '-IpcMode',
+                '-CommandFile',
+                ('"{0}"' -f $commandFile),
+                '-SessionId',
+                'owner-gone-test',
+                '-ParentProcessId',
+                '999999',
+                '-FixtureWeatherSuccess',
+                '-StartupTrace',
+                '-StartupTracePath',
+                ('"{0}"' -f $tracePath)
+            ) -join ' '
+
+            $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $arguments -PassThru -WindowStyle Hidden
+            Wait-Process -Id $process.Id -Timeout 25
+            $process.Refresh()
+            $process.HasExited | Should Be $true
+            $trace = Get-Content -LiteralPath $tracePath -Raw
+            $trace | Should Match ([regex]::Escape('IPC owner gone; worker exiting'))
+            ([regex]::Matches($trace, 'First stdout weather event emitted')).Count | Should Be 1
+        }
+        finally {
+            if ($process -and -not $process.HasExited) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            }
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
+Describe 'Privacy and release hygiene contracts' {
+    It 'keeps published docs free of local user paths and documents fallback privacy' {
+        $releaseDoc = Get-Content -LiteralPath (Join-Path $repoRoot 'docs\release\RELEASE_NOTES_v1.1.0.md') -Raw
+        $readme = Get-Content -LiteralPath (Join-Path $repoRoot 'README.md') -Raw
+        $releaseDoc | Should Not Match 'C:\\Users\\'
+        $readme | Should Match ([regex]::Escape('%LOCALAPPDATA%\PaperWeatherWidget\'))
+        $readme | Should Match 'wttr\.in .*selected district coordinates'
+    }
+}
+
 Describe 'Thin CLR launcher startup profile fast-path contracts' {
     $launcherRoot = Join-Path $repoRoot 'src\launcher'
     $workerPath = Join-Path $repoRoot 'src\worker\WeatherWorker.ps1'
@@ -775,16 +866,42 @@ Describe 'Thin CLR launcher startup profile fast-path contracts' {
         $workerText | Should Not Match ([regex]::Escape('Write-JsonLine (Write-WorkerStartupTrace'))
     }
 
-    It 'keeps fixture fast path away from network and full legacy catalog before first weather' {
+    It 'keeps fixture fast path away from network and static catalog load before first weather' {
         $workerText = Get-Content -LiteralPath $workerPath -Raw
         foreach ($token in @(
             '-not $FixtureWeatherSuccess -and -not (''LonghuaWeatherWorkerTimeoutWebClient'' -as [type])',
             'Import-LocationCatalog -SkipLegacyExtraction',
-            'After legacy catalog extraction/import skipped fixture fast path',
+            'After static catalog import fixture fast path',
             'Get-ProtocolLocationKey',
             'Get-ProtocolLocationTitle'
         )) {
             $workerText | Should Match ([regex]::Escape($token))
+        }
+    }
+
+    It 'does not execute planted legacy scripts for catalog loading' {
+        $tempRoot = Join-Path $env:TEMP ('pww-pester-legacy-script-' + [Guid]::NewGuid().ToString('N'))
+        $tempWorker = Join-Path $tempRoot 'WeatherWorker.ps1'
+        $sentinel = Join-Path $tempRoot 'legacy-executed.txt'
+        New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+        try {
+            Copy-Item -LiteralPath $workerPath -Destination $tempWorker -Force
+            @"
+`$script:ForecastSlotDefinitions = @(
+    [pscustomobject]@{ Key = 'Day0'; OffsetDays = 0; Kind = 'Day' }
+)
+function New-District {
+    Set-Content -LiteralPath '$sentinel' -Value 'executed'
+}
+`$script:Text = @{}
+"@ | Set-Content -LiteralPath (Join-Path $tempRoot 'LonghuaWeatherWidget.ps1') -Encoding UTF8
+            $output = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $tempWorker -AppRoot $tempRoot -IpcSmoke -SessionId legacy-smoke 2>&1
+            $LASTEXITCODE | Should Be 0
+            Test-Path -LiteralPath $sentinel | Should Be $false
+            ($output | Out-String) | Should Match '"type":"catalog"'
+        }
+        finally {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
 
@@ -820,7 +937,7 @@ Describe 'Thin CLR launcher startup profile fast-path contracts' {
         $mainWindowText | Should Not Match ([regex]::Escape('scroll.MaxHeight = 286'))
         $mainWindowText | Should Match ([regex]::Escape('DispatcherPriority.ApplicationIdle'))
         $mainWindowText | Should Match ([regex]::Escape('SendCommand("manualRefresh"'))
-        $mainWindowText | Should Match 'ReferenceEquals\(e\.OriginalSource, rootBorder\)'
+        $mainWindowText | Should Match 'IsDragExcludedSource\(source\)'
         $mainWindowText | Should Match 'OnDragHandleMouseDown'
     }
 
@@ -870,9 +987,9 @@ Describe 'Thin CLR launcher snapshot boot contracts' {
         try {
             $env:LOCALAPPDATA = $tempLocal
             $snapshotPath = Join-Path (Join-Path $tempLocal 'PaperWeatherWidget') 'weather-snapshot.json'
-            $defaultOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $workerPath -AppRoot $repoRoot -Once -FixtureWeatherSuccess 2>&1
+            $defaultOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $workerPath -AppRoot $tempLocal -Once -FixtureWeatherSuccess 2>&1
             Test-Path -LiteralPath $snapshotPath | Should Be $false
-            $allowedOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $workerPath -AppRoot $repoRoot -Once -FixtureWeatherSuccess -AllowFixtureSnapshotWrite 2>&1
+            $allowedOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $workerPath -AppRoot $tempLocal -Once -FixtureWeatherSuccess -AllowFixtureSnapshotWrite 2>&1
             Test-Path -LiteralPath $snapshotPath | Should Be $true
             $snapshot = Get-Content -LiteralPath $snapshotPath -Encoding UTF8 -Raw | ConvertFrom-Json
             [int]$snapshot.schema | Should Be 1
@@ -880,7 +997,7 @@ Describe 'Thin CLR launcher snapshot boot contracts' {
             [bool]$snapshot.fixture | Should Be $true
             [string]$snapshot.locationKey | Should Be '440000|440300|440309'
             [string]$snapshot.payload.status | Should Be 'ok'
-            $secondOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $workerPath -AppRoot $repoRoot -Once -FixtureWeatherSuccess -AllowFixtureSnapshotWrite 2>&1
+            $secondOutput = & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $workerPath -AppRoot $tempLocal -Once -FixtureWeatherSuccess -AllowFixtureSnapshotWrite 2>&1
             Test-Path -LiteralPath $snapshotPath | Should Be $true
             $snapshot2 = Get-Content -LiteralPath $snapshotPath -Encoding UTF8 -Raw | ConvertFrom-Json
             [int]$snapshot2.schema | Should Be 1
@@ -943,7 +1060,7 @@ Describe 'Thin CLR launcher snapshot boot contracts' {
         )) {
             $mainWindowText | Should Match ([regex]::Escape($token))
         }
-        $mainWindowText | Should Match 'ReferenceEquals\(e\.OriginalSource, rootBorder\)'
+        $mainWindowText | Should Match 'IsDragExcludedSource\(source\)'
         $mainWindowText | Should Match 'OnDragHandleMouseDown'
     }
 
@@ -1001,6 +1118,9 @@ Describe 'Thin CLR launcher snapshot diagnostics contracts' {
         foreach ($token in @(
             'if (snapshotWeatherVisible && !liveWeatherApplied)',
             'PreserveSnapshotOffline(message)',
+            'RenderErrorMessage(message)',
+            'if (liveWeatherApplied)',
+            'RenderStatus("failed")',
             'snapshotWeatherVisible = false;',
             'liveWeatherApplied = true;',
             'StartupBenchmark.LogFirstData();',
@@ -1032,6 +1152,23 @@ Describe 'Thin CLR launcher snapshot diagnostics contracts' {
         $diagnosticsBlock | Should Not Match ([regex]::Escape('Save-PersistentWeatherSnapshot'))
         $diagnosticsBlock | Should Not Match ([regex]::Escape('Invoke-WeatherRefresh'))
         $diagnosticsBlock | Should Not Match ([regex]::Escape('Get-WeatherSnapshot'))
+    }
+
+    It 'falls back to persistent snapshots after worker restarts and guards stale raw forecast cache' {
+        $workerText = Get-Content -LiteralPath $workerPath -Raw
+        foreach ($token in @(
+            'function Get-PersistentWeatherSnapshot',
+            '$persistent = Get-PersistentWeatherSnapshot',
+            '$copy[''fromSnapshot''] = $true',
+            '$copy[''fromCache''] = $true',
+            'function Test-RawWeatherCacheFresh',
+            '$script:RawWeatherCacheMaxAgeMinutes = 30',
+            'Test-RawWeatherCacheFresh -Entry $script:RawWeatherCache[$locationKey]',
+            'ConvertTo-OpenMeteoSnapshot -Weather $rawEntry.Weather -FromCache:$true',
+            '$script:NextAutoRefreshAt = (Get-Date).AddSeconds($script:RefreshSeconds)'
+        )) {
+            $workerText | Should Match ([regex]::Escape($token))
+        }
     }
 
     It 'emits malformed snapshot diagnostics without modifying the snapshot file' {

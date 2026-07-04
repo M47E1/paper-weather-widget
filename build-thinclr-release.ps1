@@ -1,16 +1,46 @@
 ﻿#Requires -Version 5.1
 param(
-    [string]$Version = '2.0.0'
+    [string]$Version = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
-if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-    throw 'Version must use Major.Minor.Patch format, for example 2.0.0.'
-}
-
 $repoRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $repoRoot = [IO.Path]::GetFullPath($repoRoot)
+
+function Resolve-BuildVersion {
+    param([string]$RequestedVersion)
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) {
+        return $RequestedVersion.Trim()
+    }
+    $versionPath = Join-Path $repoRoot 'VERSION'
+    if (Test-Path -LiteralPath $versionPath -PathType Leaf) {
+        return ((Get-Content -LiteralPath $versionPath -Raw).Trim())
+    }
+    $tag = (& git -C $repoRoot describe --tags --abbrev=0 2>$null)
+    if ($LASTEXITCODE -eq 0 -and [string]$tag -match '^v?(\d+\.\d+\.\d+)$') {
+        return $Matches[1]
+    }
+    throw 'Version was not provided and neither VERSION nor a SemVer git tag is available.'
+}
+
+function Assert-NoForbiddenPackageFiles {
+    param([string]$Root)
+
+    $matches = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -eq 'LonghuaWeatherWidget.settings.json' -or $_.Name -eq 'LonghuaWeatherWidget.ps1'
+    })
+    if ($matches.Count -gt 0) {
+        throw ('Release package contains forbidden local or legacy file: {0}' -f (($matches | Select-Object -ExpandProperty FullName) -join '; '))
+    }
+}
+
+$Version = Resolve-BuildVersion -RequestedVersion $Version
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw 'Version must use Major.Minor.Patch format, for example 2.0.1.'
+}
+
 $releaseBase = [IO.Path]::GetFullPath((Join-Path $repoRoot 'dist\release'))
 $releaseRoot = [IO.Path]::GetFullPath((Join-Path $releaseBase ("v$Version")))
 $packageName = "PaperWeatherWidget-v$Version-win-x64"
@@ -49,7 +79,7 @@ Paper Weather Widget v$Version
 English
 Run WeatherLauncher.exe. Keep WeatherWorker.ps1, ChinaRegionCatalog.json, App.xaml, and MainWindow.xaml in the same folder.
 No administrator rights are required. The app does not need an API key, account, telemetry, WebView2, Node.js, or a paid weather service.
-Settings and cache files are stored locally under the current user profile or next to the launched build when applicable.
+Settings and cache files are stored under the current user's local app data folder.
 The UI uses a paper-toned visual style with bilingual Chinese / English labels, district-level region switching, forecast slots, cached weather, and a compact side-drawer window.
 Weather data comes from Open-Meteo first, with wttr.in used as fallback. This unsigned build may trigger a Windows SmartScreen unknown publisher warning.
 This project is independent and is not affiliated with Anthropic, Claude, Open-Meteo, or wttr.in.
@@ -57,7 +87,7 @@ This project is independent and is not affiliated with Anthropic, Claude, Open-M
 中文
 运行 WeatherLauncher.exe。请保持 WeatherWorker.ps1、ChinaRegionCatalog.json、App.xaml 和 MainWindow.xaml 与启动器在同一个文件夹。
 无需管理员权限。应用不需要 API key、账号、遥测、WebView2、Node.js 或付费天气服务。
-设置和缓存只保存在本机当前用户环境，或在适用场景下保存在启动目录旁边。
+设置和缓存只保存在当前用户的本地应用数据目录。
 界面采用纸感视觉风格，支持中文 / English 双语、区县级地区切换、预报时段、缓存天气和紧凑侧边抽屉窗口。
 天气数据优先来自 Open-Meteo，失败时使用 wttr.in 作为备用。此版本未签名，Windows SmartScreen 首次启动时可能提示未知发布者。
 本项目为独立项目，与 Anthropic、Claude、Open-Meteo、wttr.in 均无从属或官方合作关系。
@@ -79,6 +109,7 @@ foreach ($file in $expectedFiles) {
         throw "Release package is missing $file"
     }
 }
+Assert-NoForbiddenPackageFiles -Root $packageDir
 
 if (Test-Path -LiteralPath $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force

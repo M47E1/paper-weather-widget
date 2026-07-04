@@ -52,6 +52,10 @@ Fallback provider: wttr.in JSON endpoint.
 
 备用数据源：wttr.in JSON 接口。
 
+When the fallback is used, wttr.in receives the selected district coordinates needed for the weather lookup.
+
+启用备用数据源时，wttr.in 会收到用于查询天气的所选区县坐标。
+
 No API key, account, paid weather service, telemetry, WebView2, Node.js, or browser runtime is required.
 
 不需要 API key、账号、付费天气服务、遥测、WebView2、Node.js 或浏览器运行时。
@@ -102,9 +106,9 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\b
 
 ## Settings / 设置
 
-Runtime settings are stored locally for the current user or next to the launched build when applicable. Do not commit real local settings, private paths, tokens, or exact home addresses.
+Runtime settings are stored under the current user's local app data folder: `%LOCALAPPDATA%\PaperWeatherWidget\`. Do not commit real local settings, private paths, tokens, or exact home addresses.
 
-运行时设置只保存在本机当前用户环境，或在适用场景下保存在启动目录旁边。请不要提交真实本地设置、私有路径、token 或精确家庭地址。
+运行时设置保存在当前用户的本地应用数据目录：`%LOCALAPPDATA%\PaperWeatherWidget\`。请不要提交真实本地设置、私有路径、token 或精确家庭地址。
 
 ## Verification / 验证
 

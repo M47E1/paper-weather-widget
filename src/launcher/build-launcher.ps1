@@ -1,18 +1,48 @@
 #Requires -Version 5.1
 param(
     [string]$OutputDir = '',
-    [string]$Version = '2.0.1',
+    [string]$Version = '',
     [switch]$SingleExe
 )
 
 $ErrorActionPreference = 'Stop'
 
+$launcherRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+$repoRoot = [IO.Path]::GetFullPath((Join-Path $launcherRoot '..\..'))
+
+function Resolve-BuildVersion {
+    param([string]$RequestedVersion)
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) {
+        return $RequestedVersion.Trim()
+    }
+    $versionPath = Join-Path $repoRoot 'VERSION'
+    if (Test-Path -LiteralPath $versionPath -PathType Leaf) {
+        return ((Get-Content -LiteralPath $versionPath -Raw).Trim())
+    }
+    $tag = (& git -C $repoRoot describe --tags --abbrev=0 2>$null)
+    if ($LASTEXITCODE -eq 0 -and [string]$tag -match '^v?(\d+\.\d+\.\d+)$') {
+        return $Matches[1]
+    }
+    throw 'Version was not provided and neither VERSION nor a SemVer git tag is available.'
+}
+
+function Assert-NoForbiddenOutputFiles {
+    param([string]$Root)
+
+    $matches = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -eq 'LonghuaWeatherWidget.settings.json' -or $_.Name -eq 'LonghuaWeatherWidget.ps1'
+    })
+    if ($matches.Count -gt 0) {
+        throw ('Build output contains forbidden local or legacy file: {0}' -f (($matches | Select-Object -ExpandProperty FullName) -join '; '))
+    }
+}
+
+$Version = Resolve-BuildVersion -RequestedVersion $Version
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     throw 'Version must use Major.Minor.Patch format, for example 2.0.1.'
 }
 
-$launcherRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$repoRoot = [IO.Path]::GetFullPath((Join-Path $launcherRoot '..\..'))
 if ([string]::IsNullOrWhiteSpace($OutputDir)) {
     $OutputDir = Join-Path $repoRoot 'dist\launcher'
 }
@@ -143,6 +173,8 @@ if (-not $SingleExe) {
     Copy-Item -LiteralPath (Join-Path $launcherRoot 'App.xaml') -Destination (Join-Path $OutputDir 'App.xaml') -Force
     Copy-Item -LiteralPath (Join-Path $launcherRoot 'MainWindow.xaml') -Destination (Join-Path $OutputDir 'MainWindow.xaml') -Force
 }
+
+Assert-NoForbiddenOutputFiles -Root $OutputDir
 
 Write-Host "Launcher: $exePath"
 if ($SingleExe) {

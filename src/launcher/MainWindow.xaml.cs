@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
@@ -322,6 +322,7 @@ namespace WeatherLauncher
             zone.MouseLeftButtonDown += OnDragHandleMouseDown;
             return zone;
         }
+
         private void ApplyDeferredVisualEffects()
         {
             if (rootBorder != null && rootBorder.Effect == null)
@@ -1271,11 +1272,8 @@ namespace WeatherLauncher
             var bundledCatalog = BundledRuntime.TryGetCatalogPath();
             if (!String.IsNullOrWhiteSpace(bundledCatalog)) { yield return bundledCatalog; }
             var baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-            var repoRoot = LauncherPaths.FindRepositoryRoot();
             yield return Path.Combine(baseDirectory, "ChinaRegionCatalog.json");
-            yield return Path.Combine(repoRoot, "ChinaRegionCatalog.json");
-            yield return Path.Combine(repoRoot, "src", "worker", "ChinaRegionCatalog.json");
-            yield return Path.Combine(Path.GetDirectoryName(repoRoot) ?? String.Empty, "worker", "ChinaRegionCatalog.json");
+            yield return Path.Combine(baseDirectory, "src", "worker", "ChinaRegionCatalog.json");
         }
         private void ApplyInitialLanguageFromDisk()
         {
@@ -1955,9 +1953,9 @@ namespace WeatherLauncher
 
         private static string ReadConfiguredLocationKey()
         {
-            var province = "Guangdong";
-            var city = "Shenzhen";
-            var district = "Longhua";
+            var province = "440000";
+            var city = "440300";
+            var district = "440309";
             try
             {
                 var settingsPath = LauncherPaths.FindSettingsFile();
@@ -1984,7 +1982,24 @@ namespace WeatherLauncher
         private static string NormalizeLocationKeyPart(string value)
         {
             if (String.IsNullOrWhiteSpace(value)) { return "_"; }
-            return value.Trim().Replace("|", "%7C");
+            var text = value.Trim();
+            switch (text)
+            {
+                case "Guangdong":
+                case "\u5e7f\u4e1c\u7701":
+                    return "440000";
+                case "Shenzhen":
+                case "\u6df1\u5733\u5e02":
+                    return "440300";
+                case "Longhua":
+                case "\u9f99\u534e\u533a":
+                    return "440309";
+                case "Luohu":
+                case "\u7f57\u6e56\u533a":
+                    return "440303";
+                default:
+                    return text.Replace("|", "%7C");
+            }
         }
 
         private string GetSnapshotDisplayStatus(SnapshotDisplayState state)
@@ -2047,7 +2062,7 @@ namespace WeatherLauncher
         private void PreserveSnapshotOffline(string message)
         {
             SetSnapshotDisplayState(SnapshotDisplayState.RefreshFailedShowingSnapshot);
-            RenderErrorState("failed");
+            RenderErrorMessage(message);
         }
         private void OnContentRendered(object sender, EventArgs e)
         {
@@ -2095,7 +2110,13 @@ namespace WeatherLauncher
 
         private void OnWindowBorderMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
-            if (e.ChangedButton != MouseButton.Left || !Object.ReferenceEquals(e.OriginalSource, rootBorder))
+            if (e.ChangedButton != MouseButton.Left)
+            {
+                return;
+            }
+
+            var source = e.OriginalSource as DependencyObject;
+            if (source != null && IsDragExcludedSource(source))
             {
                 return;
             }
@@ -2147,6 +2168,12 @@ namespace WeatherLauncher
         private void OnDragHandleMouseDown(object sender, MouseButtonEventArgs e)
         {
             if (e.ChangedButton != MouseButton.Left)
+            {
+                return;
+            }
+
+            var source = e.OriginalSource as DependencyObject;
+            if (source != null && IsDragExcludedSource(source))
             {
                 return;
             }
@@ -2342,14 +2369,7 @@ namespace WeatherLauncher
 
         private static int GetCommandTimeoutMs(string type)
         {
-            if (String.Equals(type, "manualRefresh", StringComparison.OrdinalIgnoreCase) ||
-                String.Equals(type, "setLocation", StringComparison.OrdinalIgnoreCase) ||
-                String.Equals(type, "setLanguage", StringComparison.OrdinalIgnoreCase) ||
-                String.Equals(type, "setForecastSlot", StringComparison.OrdinalIgnoreCase))
-            {
-                return 5000;
-            }
-            return 3000;
+            return 45000;
         }
 
         private void OnCommandTimeoutTimerTick(object sender, EventArgs e)
@@ -2372,7 +2392,7 @@ namespace WeatherLauncher
             if (expired.Count > 0)
             {
                 var command = expired[expired.Count - 1];
-                RenderErrorState("failed");
+                SetOffline(Ui("CommandTimeout"));
             }
         }
 
@@ -2494,8 +2514,9 @@ namespace WeatherLauncher
 
         private void ApplyWindowHeightForCurrentMode()
         {
-            Height = settingsOpen ? ExpandedSettingsHeight : ExpandedHeight;
             var workArea = SystemParameters.WorkArea;
+            var targetHeight = settingsOpen ? ExpandedSettingsHeight : ExpandedHeight;
+            Height = Math.Min(targetHeight, Math.Max(CollapsedHeight, workArea.Height));
             Top = ClampToRange(Top, workArea.Top, Math.Max(workArea.Top, workArea.Bottom - Height));
         }
         private void ToggleSettingsPanel()
@@ -2536,27 +2557,41 @@ namespace WeatherLauncher
 
             try
             {
-                var repoRoot = LauncherPaths.FindRepositoryRoot();
+                var appRoot = LauncherPaths.FindRepositoryRoot();
                 EnsureCommandFile();
-                var fixtureArg = options.FixtureWeatherSuccess ? " -FixtureWeatherSuccess" : String.Empty;
-                var fixtureSnapshotArg = options.AllowFixtureSnapshotWrite ? " -AllowFixtureSnapshotWrite" : String.Empty;
-                var traceArg = options.StartupTrace && !String.IsNullOrWhiteSpace(StartupBenchmark.StartupTracePath)
-                    ? " -StartupTrace -StartupTracePath \"" + StartupBenchmark.StartupTracePath + "\""
-                    : String.Empty;
+                var arguments = new List<string>
+                {
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    workerPath,
+                    "-AppRoot",
+                    appRoot,
+                    "-PollSeconds",
+                    options.PollSeconds.ToString(CultureInfo.InvariantCulture),
+                    "-CommandFile",
+                    commandFilePath,
+                    "-SessionId",
+                    sessionId,
+                    "-IpcMode",
+                    "-ParentProcessId",
+                    Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture)
+                };
+                if (options.FixtureWeatherSuccess) { arguments.Add("-FixtureWeatherSuccess"); }
+                if (options.StartupTrace && !String.IsNullOrWhiteSpace(StartupBenchmark.StartupTracePath))
+                {
+                    arguments.Add("-StartupTrace");
+                    arguments.Add("-StartupTracePath");
+                    arguments.Add(StartupBenchmark.StartupTracePath);
+                }
+                if (options.AllowFixtureSnapshotWrite) { arguments.Add("-AllowFixtureSnapshotWrite"); }
                 var psi = new ProcessStartInfo();
                 psi.FileName = "powershell.exe";
-                psi.Arguments = String.Format(
-                    CultureInfo.InvariantCulture,
-                    "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"{0}\" -AppRoot \"{1}\" -PollSeconds {2} -CommandFile \"{3}\" -SessionId \"{4}\" -IpcMode{5}{6}{7}",
-                    workerPath,
-                    repoRoot,
-                    options.PollSeconds,
-                    commandFilePath,
-                    sessionId,
-                    fixtureArg,
-                    traceArg,
-                    fixtureSnapshotArg);
-                psi.WorkingDirectory = repoRoot;
+                psi.Arguments = JoinCommandLineArguments(arguments);
+                psi.WorkingDirectory = appRoot;
                 psi.RedirectStandardOutput = true;
                 psi.RedirectStandardError = true;
                 psi.UseShellExecute = false;
@@ -3038,7 +3073,12 @@ namespace WeatherLauncher
 
         private void RenderErrorState(string stateKey)
         {
-            errorBlock.Text = UiStateLabel(stateKey);
+            RenderErrorMessage(UiStateLabel(stateKey));
+        }
+
+        private void RenderErrorMessage(string message)
+        {
+            errorBlock.Text = NonEmpty(message, UiStateLabel("failed"));
         }
 
         private void ClearError()
@@ -3134,7 +3174,22 @@ namespace WeatherLauncher
 
         private void SetOffline(string message)
         {
+            if (snapshotWeatherVisible && !liveWeatherApplied)
+            {
+                PreserveSnapshotOffline(message);
+                return;
+            }
+
+            if (liveWeatherApplied)
+            {
+                RenderStatus("failed");
+                RenderUpdatedState("failed");
+                RenderErrorMessage(message);
+                return;
+            }
+
             RenderWeatherState("failed");
+            RenderErrorMessage(message);
         }
 
         private string DefaultLocationLabel()
@@ -3276,7 +3331,7 @@ namespace WeatherLauncher
                 return "--";
             }
 
-            return value.Value.ToString("F" + digits, CultureInfo.InvariantCulture) + " C";
+            return value.Value.ToString("F" + digits, CultureInfo.InvariantCulture) + " \u00B0C";
         }
 
         private static string FormatMillimeters(double? value)
@@ -3310,29 +3365,3 @@ namespace WeatherLauncher
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

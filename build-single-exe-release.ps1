@@ -1,16 +1,35 @@
 #Requires -Version 5.1
 param(
-    [string]$Version = '2.0.1'
+    [string]$Version = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
+$repoRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+$repoRoot = [IO.Path]::GetFullPath($repoRoot)
+
+function Resolve-BuildVersion {
+    param([string]$RequestedVersion)
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) {
+        return $RequestedVersion.Trim()
+    }
+    $versionPath = Join-Path $repoRoot 'VERSION'
+    if (Test-Path -LiteralPath $versionPath -PathType Leaf) {
+        return ((Get-Content -LiteralPath $versionPath -Raw).Trim())
+    }
+    $tag = (& git -C $repoRoot describe --tags --abbrev=0 2>$null)
+    if ($LASTEXITCODE -eq 0 -and [string]$tag -match '^v?(\d+\.\d+\.\d+)$') {
+        return $Matches[1]
+    }
+    throw 'Version was not provided and neither VERSION nor a SemVer git tag is available.'
+}
+
+$Version = Resolve-BuildVersion -RequestedVersion $Version
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     throw 'Version must use Major.Minor.Patch format, for example 2.0.1.'
 }
 
-$repoRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-$repoRoot = [IO.Path]::GetFullPath($repoRoot)
 $releaseBase = [IO.Path]::GetFullPath((Join-Path $repoRoot 'dist\release'))
 $releaseRoot = [IO.Path]::GetFullPath((Join-Path $releaseBase ("v$Version")))
 $buildOutput = Join-Path $releaseRoot 'build'

@@ -1,18 +1,48 @@
 #Requires -Version 5.1
 param(
-    [string]$Version = '1.3.0',
+    [string]$Version = '',
     [switch]$SkipPs2ExeDownload
 )
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-if ($Version -notmatch '^\d+\.\d+\.\d+$') {
-    throw 'Version must use Major.Minor.Patch format, for example 1.0.0.'
-}
-
 $repoRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $repoRoot = [IO.Path]::GetFullPath($repoRoot)
+
+function Resolve-BuildVersion {
+    param([string]$RequestedVersion)
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) {
+        return $RequestedVersion.Trim()
+    }
+    $versionPath = Join-Path $repoRoot 'VERSION'
+    if (Test-Path -LiteralPath $versionPath -PathType Leaf) {
+        return ((Get-Content -LiteralPath $versionPath -Raw).Trim())
+    }
+    $tag = (& git -C $repoRoot describe --tags --abbrev=0 2>$null)
+    if ($LASTEXITCODE -eq 0 -and [string]$tag -match '^v?(\d+\.\d+\.\d+)$') {
+        return $Matches[1]
+    }
+    throw 'Version was not provided and neither VERSION nor a SemVer git tag is available.'
+}
+
+function Assert-NoForbiddenPackageFiles {
+    param([string]$Root)
+
+    $matches = @(Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -eq 'LonghuaWeatherWidget.settings.json' -or $_.Name -eq 'LonghuaWeatherWidget.ps1'
+    })
+    if ($matches.Count -gt 0) {
+        throw ('Release package contains forbidden local or legacy file: {0}' -f (($matches | Select-Object -ExpandProperty FullName) -join '; '))
+    }
+}
+
+$Version = Resolve-BuildVersion -RequestedVersion $Version
+if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw 'Version must use Major.Minor.Patch format, for example 2.0.1.'
+}
+
 $sourcePath = Join-Path $repoRoot 'LonghuaWeatherWidget.ps1'
 $licensePath = Join-Path $repoRoot 'LICENSE'
 $distDir = Join-Path $repoRoot 'dist'
@@ -124,7 +154,7 @@ Paper Weather Widget v$Version
 
 Run PaperWeatherWidget.exe. No administrator rights are required.
 
-Settings are stored in LonghuaWeatherWidget.settings.json next to the launched script or EXE. The app does not require an API key, account, telemetry, or paid weather service.
+Settings are stored under the current user's local app data folder. The app does not require an API key, account, telemetry, or paid weather service.
 
 This edition uses an Anthropic-inspired style: paper-toned surfaces, restrained borders, and warm accent colors. It is not affiliated with, endorsed by, or using brand assets from Anthropic or Claude.
 
@@ -133,6 +163,8 @@ The app uses Open-Meteo as the primary weather provider and wttr.in as fallback.
 This build is unsigned. Windows SmartScreen may show an unknown publisher warning on first launch.
 "@
     Set-Content -LiteralPath (Join-Path $packageDir 'README.txt') -Value $packageReadme -Encoding ASCII
+
+    Assert-NoForbiddenPackageFiles -Root $packageDir
 
     if (Test-Path -LiteralPath $zipPath) {
         Remove-Item -LiteralPath $zipPath -Force

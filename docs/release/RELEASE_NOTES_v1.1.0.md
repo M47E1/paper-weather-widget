@@ -14,7 +14,7 @@ Release title: Longhua Weather Widget v1.1.0 – Anthropic-inspired Edition
 
 - Source RC hash preflight passed for `LonghuaWeatherWidget.ps1`, `Test-LonghuaWeatherWidget.ps1`, `Run-ProjectTests.ps1`, and `AGENTS.md`.
 - Project tests and `-TestMode` must pass before release publication.
-- Full AllSupportedRegions evidence remains the final RC evidence index at `C:\Users\25800\Documents\今天深圳下雨了么\reports\final-evidence\english-ui-gate-20260627-125712\final-evidence-index.json`.
+- Full AllSupportedRegions evidence remains in the local `reports/final-evidence/english-ui-gate-20260627-125712/final-evidence-index.json` evidence index.
 - The UI-only v1.1.0 branch does not rerun the full 47-region live data gate because the data layer was not changed.
 
 ## Notes
