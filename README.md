@@ -10,20 +10,20 @@ This project is independent. It is not affiliated with Anthropic, Claude, Open-M
 
 ## Download / 下载
 
-Download v2.0.1 from GitHub Releases:
+Download v3.0.0 from GitHub Releases:
 
-从 GitHub Releases 下载 v2.0.1：
+从 GitHub Releases 下载 v3.0.0：
 
-https://github.com/M47E1/paper-weather-widget/releases/tag/v2.0.1
+https://github.com/M47E1/paper-weather-widget/releases/tag/v3.0.0
 
 Recommended assets / 推荐下载：
 
-- `PaperWeatherWidget-v2.0.1-win-x64.exe`
+- `PaperWeatherWidget-v3.0.0-win-x64.exe`
 - `SHA256SUMS.txt`
 
-Run `PaperWeatherWidget-v2.0.1-win-x64.exe` directly. The worker script and region catalog are bundled inside the exe and are released to the local user cache at runtime.
+Run `PaperWeatherWidget-v3.0.0-win-x64.exe` directly. The worker script and region catalog are bundled inside the exe and are released to the local user cache at runtime.
 
-直接运行 `PaperWeatherWidget-v2.0.1-win-x64.exe`。worker 脚本和地区库已内嵌在 exe 中，运行时会释放到当前用户的本地缓存目录。
+直接运行 `PaperWeatherWidget-v3.0.0-win-x64.exe`。worker 脚本和地区库已内嵌在 exe 中，运行时会释放到当前用户的本地缓存目录。
 
 No administrator rights are required.
 
@@ -67,7 +67,7 @@ Build the Thin CLR launcher for development:
 构建 Thin CLR 开发版启动器：
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 2.0.1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 3.0.0
 ```
 
 Create the single exe release asset and hashes:
@@ -75,15 +75,15 @@ Create the single exe release asset and hashes:
 生成单 exe release 资产和哈希：
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\build-single-exe-release.ps1 -Version 2.0.1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\build-single-exe-release.ps1 -Version 3.0.0
 ```
 
 Release output:
 
 发布输出：
 
-- `dist/release/v2.0.1/PaperWeatherWidget-v2.0.1-win-x64.exe`
-- `dist/release/v2.0.1/SHA256SUMS.txt`
+- `dist/release/v3.0.0/PaperWeatherWidget-v3.0.0-win-x64.exe`
+- `dist/release/v3.0.0/SHA256SUMS.txt`
 
 ## Run From Source / 从源码运行
 
@@ -100,7 +100,7 @@ Thin CLR development build:
 Thin CLR 开发构建：
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 2.0.1
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 3.0.0
 .\dist\launcher\WeatherLauncher.exe
 ```
 
