@@ -1,44 +1,42 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
+using Microsoft.Win32;
 
 namespace PaperWeatherWidget.UI
 {
     /// <summary>
-    /// Native Windows 10/11 DWM integration (rounded corners, subtle backdrop blur, hide from Alt+Tab)
-    /// plus OS working-set trim to keep idle desktop widget RAM ultra-low.
+    /// Native Windows 11 22H2+ (Build >= 22621) DWM SystemBackdrop Acrylic + native anti-aliased rounded corners
+    /// (zero square-corner Acrylic leak!), Alt+Tab ToolWindow hiding, and OS working-set trimming.
+    /// Falls back cleanly to pure WPF rounded translucent glass on Windows 10 without rectangular Acrylic artifacts.
     /// </summary>
     internal static class GlassWindowHelper
     {
-        private const int WcaAccentPolicy = 19;
         private const int DwmwaUseImmersiveDarkMode = 20;
         private const int DwmwaWindowCornerPreference = 33;
-        private const int DwmwcpRound = 2;
+        private const int DwmwaSystemBackdropType = 38;
+
+        private const int DwmwcpRound = 2;             // Native Windows 11 8px anti-aliased rounded corners + drop shadow
+        private const int DwmsbtTransientWindow = 3;   // Native Windows 11 Acrylic frosted glass backdrop
 
         private const int GwlExStyle = -20;
         private const int WsExToolWindow = 0x00000080;
 
         [StructLayout(LayoutKind.Sequential)]
-        private struct AccentPolicy
+        private struct MARGINS
         {
-            public int AccentState;
-            public int AccentFlags;
-            public uint GradientColor;
-            public int AnimationId;
+            public int Left;
+            public int Right;
+            public int Top;
+            public int Bottom;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
-        private struct WindowCompositionAttributeData
-        {
-            public int Attribute;
-            public IntPtr Data;
-            public int SizeOfData;
-        }
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern int SetWindowCompositionAttribute(IntPtr hwnd, ref WindowCompositionAttributeData data);
+        [DllImport("dwmapi.dll", PreserveSig = true)]
+        private static extern int DwmExtendFrameIntoClientArea(IntPtr hwnd, ref MARGINS margins);
 
         [DllImport("dwmapi.dll", PreserveSig = true)]
         private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
@@ -52,7 +50,39 @@ namespace PaperWeatherWidget.UI
         [DllImport("psapi.dll", SetLastError = true)]
         private static extern bool EmptyWorkingSet(IntPtr hProcess);
 
-        public static bool ApplyBackdrop(Window window, bool isDark, uint acrylicTintAbgr)
+        private static bool? cachedWin11Support;
+
+        /// <summary>
+        /// Reads real Windows build number from registry (unaffected by .NET Framework manifest version lie).
+        /// Windows 11 22H2+ (Build >= 22621) natively supports DWMWA_SYSTEMBACKDROP_TYPE = Acrylic + DWMWCP_ROUND.
+        /// </summary>
+        public static bool IsWindows11NativeAcrylicSupported()
+        {
+            if (cachedWin11Support.HasValue) { return cachedWin11Support.Value; }
+            try
+            {
+                using (var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion", false))
+                {
+                    if (key != null)
+                    {
+                        var raw = Convert.ToString(key.GetValue("CurrentBuildNumber"), CultureInfo.InvariantCulture);
+                        int build;
+                        if (Int32.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out build))
+                        {
+                            cachedWin11Support = build >= 22621;
+                            return cachedWin11Support.Value;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+            cachedWin11Support = false;
+            return false;
+        }
+
+        public static bool ApplyBackdrop(Window window, bool isDark, bool useNativeWin11Acrylic)
         {
             try
             {
@@ -66,54 +96,35 @@ namespace PaperWeatherWidget.UI
                     SetWindowLongPtr(hwnd, GwlExStyle, new IntPtr(exStyle | WsExToolWindow));
                 }
 
-                // Windows 11 rounded corners + dark mode attribute
-                var cornerPref = DwmwcpRound;
-                try { DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref cornerPref, sizeof(int)); } catch { }
-                var darkFlag = isDark ? 1 : 0;
-                try { DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkMode, ref darkFlag, sizeof(int)); } catch { }
-
-                // Acrylic blur-behind (4 = EnableAcrylicBlurBehind, 3 = EnableBlurBehind)
-                if (TrySetAccent(hwnd, 4, acrylicTintAbgr))
+                if (!useNativeWin11Acrylic)
                 {
-                    return true;
+                    // On Windows 10 / offscreen mode, rely cleanly on WPF CornerRadius without rectangular Acrylic leaks.
+                    return false;
                 }
-                return TrySetAccent(hwnd, 3, 0x00000000u);
-            }
-            catch
-            {
-                return false;
-            }
-        }
 
-        private static bool TrySetAccent(IntPtr hwnd, int state, uint color)
-        {
-            var policy = new AccentPolicy
-            {
-                AccentState = state,
-                AccentFlags = 2,
-                GradientColor = color,
-                AnimationId = 0
-            };
-            var size = Marshal.SizeOf(typeof(AccentPolicy));
-            var ptr = Marshal.AllocHGlobal(size);
-            try
-            {
-                Marshal.StructureToPtr(policy, ptr, false);
-                var data = new WindowCompositionAttributeData
+                var src = HwndSource.FromHwnd(hwnd);
+                if (src != null && src.CompositionTarget != null)
                 {
-                    Attribute = WcaAccentPolicy,
-                    Data = ptr,
-                    SizeOfData = size
-                };
-                return SetWindowCompositionAttribute(hwnd, ref data) != 0;
+                    src.CompositionTarget.BackgroundColor = Colors.Transparent;
+                }
+
+                var margins = new MARGINS { Left = -1, Right = -1, Top = -1, Bottom = -1 };
+                var hrExtend = DwmExtendFrameIntoClientArea(hwnd, ref margins);
+
+                var cornerPref = DwmwcpRound;
+                var hrCorner = DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref cornerPref, sizeof(int));
+
+                var darkFlag = isDark ? 1 : 0;
+                DwmSetWindowAttribute(hwnd, DwmwaUseImmersiveDarkMode, ref darkFlag, sizeof(int));
+
+                var backdrop = DwmsbtTransientWindow;
+                var hrBackdrop = DwmSetWindowAttribute(hwnd, DwmwaSystemBackdropType, ref backdrop, sizeof(int));
+
+                return hrExtend == 0 && hrCorner == 0 && hrBackdrop == 0;
             }
             catch
             {
                 return false;
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(ptr);
             }
         }
 

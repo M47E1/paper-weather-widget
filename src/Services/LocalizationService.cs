@@ -186,6 +186,14 @@ namespace PaperWeatherWidget.Services
             return slotKey;
         }
 
+        public static string ForecastHeading(string lang, int days)
+        {
+            if (days <= 0) { days = 5; }
+            return IsEnglish(lang)
+                ? String.Format(CultureInfo.InvariantCulture, "{0}-Day Forecast", days)
+                : String.Format(CultureInfo.InvariantCulture, "未来 {0} 天预报", days);
+        }
+
         public static string ShortWeekday(string lang, DateTime date, int dayIndex)
         {
             if (dayIndex == 0) { return Ui(lang, "Today"); }

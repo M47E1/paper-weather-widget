@@ -311,15 +311,27 @@ namespace PaperWeatherWidget.UI
                     break;
 
                 case WeatherSceneKind.ClearNight:
-                    for (var i = 0; i < 28; i++)
+                    // Keep stars cleanly in the upper open sky so text and middle controls stay spotless!
+                    for (var i = 0; i < 22; i++)
                     {
+                        double sx, sy;
+                        if (i % 3 == 0)
+                        {
+                            sx = 178 + rng.NextDouble() * (sceneWidth - 196);
+                            sy = 14 + rng.NextDouble() * 130;
+                        }
+                        else
+                        {
+                            sx = 18 + rng.NextDouble() * (sceneWidth - 36);
+                            sy = 10 + rng.NextDouble() * 34;
+                        }
                         stars.Add(new StarParticle
                         {
-                            X = 14 + rng.NextDouble() * (sceneWidth - 28),
-                            Y = 12 + rng.NextDouble() * (sceneHeight * 0.62),
-                            R = (i % 6 == 0) ? 1.55 : (0.7 + rng.NextDouble() * 0.65),
+                            X = sx,
+                            Y = sy,
+                            R = (i % 5 == 0) ? 1.45 : (0.65 + rng.NextDouble() * 0.55),
                             Phase = rng.NextDouble() * 6.28,
-                            Speed = 1.1 + rng.NextDouble() * 1.9
+                            Speed = 1.1 + rng.NextDouble() * 1.8
                         });
                     }
                     break;

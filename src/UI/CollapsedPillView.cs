@@ -89,10 +89,12 @@ namespace PaperWeatherWidget.UI
             MouseLeftButtonUp += OnMouseUp;
         }
 
-        public void ApplyVisual(ThemePalette theme, string edge, WeatherSnapshot snap, string lang, int? overrideWmo, int? overrideIsDay)
+        public void ApplyVisual(ThemePalette theme, string edge, WeatherSnapshot snap, string lang, int? overrideWmo, int? overrideIsDay, bool useNativeWin11Radius)
         {
             var isLeft = String.Equals(edge, "Left", StringComparison.OrdinalIgnoreCase);
-            var radius = isLeft ? new CornerRadius(0, 18, 18, 0) : new CornerRadius(18, 0, 0, 18);
+            var radius = useNativeWin11Radius
+                ? new CornerRadius(8)
+                : (isLeft ? new CornerRadius(0, 18, 18, 0) : new CornerRadius(18, 0, 0, 18));
             CornerRadius = radius;
             sheenLayer.CornerRadius = radius;
             sheenLayer.Background = theme.TopSheenBrush;
@@ -102,6 +104,7 @@ namespace PaperWeatherWidget.UI
 
             Background = theme.BuildSkyGradient(code, isDay, true);
             BorderBrush = theme.OuterGlassBorder;
+            BorderThickness = useNativeWin11Radius ? new Thickness(0.8) : new Thickness(1.2);
             tempBlock.Foreground = theme.TextPrimary;
 
             iconHost.Child = WeatherIcons.CreateWeatherIcon(code, isDay, 32, true);

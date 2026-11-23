@@ -27,8 +27,12 @@ namespace PaperWeatherWidget.Models
         public int? WeatherCode { get; set; }
         public double? TempMax { get; set; }
         public double? TempMin { get; set; }
+        public double? FeelsMax { get; set; }
+        public double? FeelsMin { get; set; }
         public double? PrecipSum { get; set; }
         public int? PrecipProbMax { get; set; }
+        public double? WindMax { get; set; }
+        public double? GustMax { get; set; }
         public string SlotKey { get; set; }
     }
 

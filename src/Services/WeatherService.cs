@@ -19,13 +19,14 @@ namespace PaperWeatherWidget.Services
     }
 
     /// <summary>
-    /// Native C# weather engine: Open-Meteo primary + wttr.in fallback, lean payload,
-    /// instant in-memory slot projection, and persistent offline snapshot cache.
-    /// Completely eliminates the legacy PowerShell worker process.
+    /// Native C# weather engine:
+    /// - Primary: Open-Meteo (GZip-only to avoid .NET 4.8 zlib-deflate bug, lean 48h hourly + 14d daily payload).
+    /// - Fallback: wttr.in (with full per-day weatherCode, 3-hourly forecast slots, WindGustKmph, and near-term rain).
+    /// - Instant in-memory slot projection (Day0..Day13 + Hour+1h/+3h/+6h/+12h/+24h) and offline snapshot cache.
     /// </summary>
     public sealed class WeatherService
     {
-        private const int RequestTimeoutMs = 8000;
+        private const int RequestTimeoutMs = 9000;
         private const int SnapshotStaleHours = 24;
         private const int RawCacheMaxAgeMinutes = 25;
 
@@ -34,7 +35,7 @@ namespace PaperWeatherWidget.Services
         private const string OpenMeteoHourlyFields =
             "temperature_2m,relative_humidity_2m,apparent_temperature,precipitation_probability,precipitation,rain,showers,weather_code,cloud_cover,surface_pressure,wind_speed_10m,wind_gusts_10m,is_day";
         private const string OpenMeteoDailyFields =
-            "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max";
+            "weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max,wind_gusts_10m_max";
 
         private readonly object cacheLock = new object();
         private RawForecastBundle cachedBundle;
@@ -269,9 +270,10 @@ namespace PaperWeatherWidget.Services
 
         private static string BuildOpenMeteoUrl(double lat, double lon)
         {
+            // Lean 48h hourly + 14d daily (~6 KB total, responds in ~1-2s with full 5-14 day forecasts!)
             return String.Format(
                 CultureInfo.InvariantCulture,
-                "https://api.open-meteo.com/v1/forecast?latitude={0}&longitude={1}&current={2}&hourly={3}&daily={4}&timezone=auto&forecast_days=14&forecast_hours=336&temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm",
+                "https://api.open-meteo.com/v1/forecast?latitude={0}&longitude={1}&current={2}&hourly={3}&daily={4}&timezone=auto&forecast_days=14&forecast_hours=48&temperature_unit=celsius&wind_speed_unit=kmh&precipitation_unit=mm",
                 lat.ToString("0.######", CultureInfo.InvariantCulture),
                 lon.ToString("0.######", CultureInfo.InvariantCulture),
                 OpenMeteoCurrentFields,
@@ -281,14 +283,14 @@ namespace PaperWeatherWidget.Services
 
         private static string HttpGetString(string url)
         {
+            // Prefer direct connection first (fast on Open-Meteo & wttr.in), fall back to system proxy if direct fails
             try
             {
-                return HttpGetCore(url, true);
+                return HttpGetCore(url, false);
             }
             catch
             {
-                // If system proxy is configured but unresponsive/blocking, retry direct connection once
-                return HttpGetCore(url, false);
+                return HttpGetCore(url, true);
             }
         }
 
@@ -298,8 +300,9 @@ namespace PaperWeatherWidget.Services
             req.Method = "GET";
             req.Timeout = RequestTimeoutMs;
             req.ReadWriteTimeout = RequestTimeoutMs;
-            req.UserAgent = "PaperWeatherWidget/4.0";
-            req.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            req.UserAgent = "PaperWeatherWidget/4.2";
+            // CRITICAL: Use GZip only — .NET Framework 4.8 DeflateStream fails on Open-Meteo zlib-deflate headers!
+            req.AutomaticDecompression = DecompressionMethods.GZip;
             req.KeepAlive = false;
             if (!useSystemProxy)
             {
@@ -407,8 +410,12 @@ namespace PaperWeatherWidget.Services
                 var codes = GetArray(daily, "weather_code");
                 var maxs = GetArray(daily, "temperature_2m_max");
                 var mins = GetArray(daily, "temperature_2m_min");
+                var fMaxs = GetArray(daily, "apparent_temperature_max");
+                var fMins = GetArray(daily, "apparent_temperature_min");
                 var sums = GetArray(daily, "precipitation_sum");
                 var probs = GetArray(daily, "precipitation_probability_max");
+                var wMaxs = GetArray(daily, "wind_speed_10m_max");
+                var gMaxs = GetArray(daily, "wind_gusts_10m_max");
 
                 for (var i = 0; i < dates.Length; i++)
                 {
@@ -424,8 +431,12 @@ namespace PaperWeatherWidget.Services
                         WeatherCode = ArrInt(codes, i),
                         TempMax = ArrDouble(maxs, i),
                         TempMin = ArrDouble(mins, i),
+                        FeelsMax = ArrDouble(fMaxs, i),
+                        FeelsMin = ArrDouble(fMins, i),
                         PrecipSum = ArrDouble(sums, i),
                         PrecipProbMax = ArrInt(probs, i),
+                        WindMax = ArrDouble(wMaxs, i),
+                        GustMax = ArrDouble(gMaxs, i),
                         SlotKey = "Day" + i.ToString(CultureInfo.InvariantCulture)
                     });
                 }
@@ -447,12 +458,13 @@ namespace PaperWeatherWidget.Services
             var cur = ccArr[0] as Dictionary<string, object>;
             if (cur == null) { return null; }
 
+            var now = DateTime.Now;
             var bundle = new RawForecastBundle
             {
                 LocationKey = district.LocationKey,
                 Source = "wttr.in",
                 FetchedAtUtc = DateTime.UtcNow,
-                BaseTimeLocal = DateTime.Now,
+                BaseTimeLocal = now,
                 NearTermKey = "unavailable"
             };
 
@@ -466,9 +478,9 @@ namespace PaperWeatherWidget.Services
             var rainNow = GetDouble(cur, "precipMM") ?? 0.0;
             bundle.Current = new HourlyForecastItem
             {
-                Time = bundle.BaseTimeLocal,
+                Time = now,
                 WeatherCode = MapWttrCodeToWmo(GetInt(cur, "weatherCode")),
-                IsDay = (DateTime.Now.Hour >= 6 && DateTime.Now.Hour < 19) ? 1 : 0,
+                IsDay = (now.Hour >= 6 && now.Hour < 19) ? 1 : 0,
                 Temp = GetDouble(cur, "temp_C"),
                 FeelsLike = GetDouble(cur, "FeelsLikeC"),
                 RainNow = rainNow,
@@ -492,28 +504,70 @@ namespace PaperWeatherWidget.Services
 
                 double sumRain = 0.0;
                 int maxProb = 0;
+                double maxWind = 0.0;
+                double maxGust = 0.0;
+                int? middayCode = null;
+
                 var hrs = GetArray(dayDict, "hourly");
                 for (var h = 0; h < hrs.Length; h++)
                 {
                     var hd = hrs[h] as Dictionary<string, object>;
                     if (hd == null) { continue; }
-                    sumRain += GetDouble(hd, "precipMM") ?? 0.0;
-                    var p = GetInt(hd, "chanceofrain") ?? 0;
-                    if (p > maxProb) { maxProb = p; }
+                    var hrPrecip = GetDouble(hd, "precipMM") ?? 0.0;
+                    var hrProb = GetInt(hd, "chanceofrain") ?? 0;
+                    var hrWind = GetDouble(hd, "windspeedKmph");
+                    var hrGust = GetDouble(hd, "WindGustKmph");
+                    var hrWmo = MapWttrCodeToWmo(GetInt(hd, "weatherCode"));
+                    var timeRaw = GetInt(hd, "time") ?? (h * 300);
+                    var hrClock = Math.Max(0, Math.Min(23, timeRaw / 100));
+
+                    sumRain += hrPrecip;
+                    if (hrProb > maxProb) { maxProb = hrProb; }
+                    if (hrWind.HasValue && hrWind.Value > maxWind) { maxWind = hrWind.Value; }
+                    if (hrGust.HasValue && hrGust.Value > maxGust) { maxGust = hrGust.Value; }
+                    if (hrClock == 12 || (middayCode == null && h == hrs.Length / 2))
+                    {
+                        middayCode = hrWmo;
+                    }
+
+                    bundle.Hourly.Add(new HourlyForecastItem
+                    {
+                        Time = dt.Date.AddHours(hrClock),
+                        WeatherCode = hrWmo,
+                        IsDay = (hrClock >= 6 && hrClock < 19) ? 1 : 0,
+                        Temp = GetDouble(hd, "tempC"),
+                        FeelsLike = GetDouble(hd, "FeelsLikeC"),
+                        RainNow = hrPrecip,
+                        RainProbability = hrProb,
+                        Humidity = GetDouble(hd, "humidity"),
+                        Cloud = GetDouble(hd, "cloudcover"),
+                        Pressure = GetDouble(hd, "pressure"),
+                        Wind = hrWind,
+                        Gust = hrGust
+                    });
                 }
 
                 bundle.Daily.Add(new DailyForecastItem
                 {
                     Date = dt,
-                    WeatherCode = bundle.Current.WeatherCode,
+                    WeatherCode = middayCode ?? bundle.Current.WeatherCode,
                     TempMax = GetDouble(dayDict, "maxtempC"),
                     TempMin = GetDouble(dayDict, "mintempC"),
                     PrecipSum = sumRain,
                     PrecipProbMax = maxProb,
+                    WindMax = maxWind > 0 ? (double?)maxWind : null,
+                    GustMax = maxGust > 0 ? (double?)maxGust : null,
                     SlotKey = "Day" + i.ToString(CultureInfo.InvariantCulture)
                 });
             }
 
+            // Fill missing current gust from nearest hourly slot if wttr current_condition omitted it
+            if (!bundle.Current.Gust.HasValue && bundle.Hourly.Count > 0)
+            {
+                var nearest = FindNearestHourly(bundle.Hourly, now);
+                if (nearest != null) { bundle.Current.Gust = nearest.Gust; }
+            }
+            bundle.NearTermKey = ComputeNearTermKey(bundle.Hourly, now);
             return bundle;
         }
 
@@ -522,6 +576,7 @@ namespace PaperWeatherWidget.Services
             slotKey = SettingsService.NormalizeSlotKey(slotKey);
             var isCurrent = String.Equals(slotKey, "Day0", StringComparison.OrdinalIgnoreCase);
             var targetTime = ResolveTargetTime(slotKey, bundle.BaseTimeLocal);
+            DailyForecastItem dailyMatch = FindDailyForDate(bundle.Daily, targetTime.Date);
 
             HourlyForecastItem sample = null;
             if (isCurrent && bundle.Current != null)
@@ -530,14 +585,40 @@ namespace PaperWeatherWidget.Services
             }
             else if (bundle.Hourly.Count > 0)
             {
-                sample = FindNearestHourly(bundle.Hourly, targetTime);
+                var nearest = FindNearestHourly(bundle.Hourly, targetTime);
+                if (nearest != null && Math.Abs((nearest.Time - targetTime).TotalHours) <= 12.0)
+                {
+                    sample = nearest;
+                }
+            }
+
+            // For days beyond the 48h hourly horizon (Day2..Day13), project cleanly from DailyForecastItem!
+            if (sample == null && dailyMatch != null)
+            {
+                double? midTemp = (dailyMatch.TempMax.HasValue && dailyMatch.TempMin.HasValue)
+                    ? (double?)Math.Round((dailyMatch.TempMax.Value + dailyMatch.TempMin.Value) / 2.0, 1)
+                    : (dailyMatch.TempMax ?? dailyMatch.TempMin);
+                double? midFeels = (dailyMatch.FeelsMax.HasValue && dailyMatch.FeelsMin.HasValue)
+                    ? (double?)Math.Round((dailyMatch.FeelsMax.Value + dailyMatch.FeelsMin.Value) / 2.0, 1)
+                    : midTemp;
+                sample = new HourlyForecastItem
+                {
+                    Time = targetTime,
+                    WeatherCode = dailyMatch.WeatherCode,
+                    IsDay = 1,
+                    Temp = midTemp,
+                    FeelsLike = midFeels,
+                    RainNow = dailyMatch.PrecipSum,
+                    RainProbability = dailyMatch.PrecipProbMax,
+                    Wind = dailyMatch.WindMax,
+                    Gust = dailyMatch.GustMax
+                };
             }
             if (sample == null)
             {
                 sample = bundle.Current ?? new HourlyForecastItem();
             }
 
-            DailyForecastItem dailyMatch = FindDailyForDate(bundle.Daily, targetTime.Date);
             double? rainProb = sample.RainProbability.HasValue
                 ? (double?)sample.RainProbability.Value
                 : (dailyMatch != null && dailyMatch.PrecipProbMax.HasValue ? (double?)dailyMatch.PrecipProbMax.Value : 0.0);
@@ -639,8 +720,12 @@ namespace PaperWeatherWidget.Services
                     WeatherCode = codes[d % codes.Length],
                     TempMax = 27.5 + (d % 3),
                     TempMin = 19.2 + (d % 2),
+                    FeelsMax = 28.0 + (d % 3),
+                    FeelsMin = 18.8 + (d % 2),
                     PrecipSum = d % 2 == 1 ? 3.4 : 1.2,
                     PrecipProbMax = d % 2 == 1 ? 65 : 35,
+                    WindMax = 14.0 + (d % 4),
+                    GustMax = 22.0 + (d % 5),
                     SlotKey = "Day" + d.ToString(CultureInfo.InvariantCulture)
                 });
             }
@@ -769,11 +854,11 @@ namespace PaperWeatherWidget.Services
             double maxRain = 0.0;
             int maxProb = 0;
             bool any = false;
-            var limit = now.AddHours(2.5);
+            var limit = now.AddHours(3.5);
             for (var i = 0; i < hourly.Count; i++)
             {
                 var item = hourly[i];
-                if (item.Time < now.AddMinutes(-30) || item.Time > limit) { continue; }
+                if (item.Time < now.AddMinutes(-90) || item.Time > limit) { continue; }
                 any = true;
                 if (item.RainNow.HasValue && item.RainNow.Value > maxRain) { maxRain = item.RainNow.Value; }
                 if (item.RainProbability.HasValue && item.RainProbability.Value > maxProb) { maxProb = item.RainProbability.Value; }
@@ -810,6 +895,7 @@ namespace PaperWeatherWidget.Services
             if (c == 119 || c == 122) { return 3; }
             if (c == 143 || c == 248 || c == 260) { return 45; }
             if (c >= 386) { return 95; }
+            if (c >= 323 && c <= 338) { return 73; }
             if (c >= 302 && c <= 359) { return 63; }
             if (c >= 176 && c <= 301) { return 61; }
             return 2;
