@@ -49,17 +49,24 @@ namespace PaperWeatherWidget.UI
         private ComboBox districtCombo;
 
         private TextBlock themeLabel;
+        private TextBlock glassOpacityLabel;
         private TextBlock languageLabel;
         private TextBlock refreshLabel;
+        private TextBlock scenePreviewLabel;
         private TextBlock topmostLabel;
         private TextBlock startupLabel;
 
         private Button themeAutoBtn;
         private Button themeLightBtn;
         private Button themeDarkBtn;
+        private Button glassAiryBtn;
+        private Button glassBalancedBtn;
+        private Button glassRichBtn;
         private Button langZhBtn;
         private Button langEnBtn;
         private readonly Dictionary<int, Button> refreshButtons = new Dictionary<int, Button>();
+        private readonly Dictionary<string, Button> previewButtons = new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
+        private string activePreviewKey = "live";
         private Button topmostToggleBtn;
         private Button startupToggleBtn;
         private Button creditBtn;
@@ -68,8 +75,10 @@ namespace PaperWeatherWidget.UI
         public event Action CloseRequested;
         public event Action<DistrictItem> DistrictSelected;
         public event Action<string> ThemeModeChanged;
+        public event Action<string> GlassOpacityChanged;
         public event Action<string> LanguageChanged;
         public event Action<int> RefreshIntervalChanged;
+        public event Action<string> ScenePreviewChanged;
         public event Action<bool> TopmostChanged;
 
         public SettingsView(RegionCatalogService catalogService)
@@ -84,10 +93,11 @@ namespace PaperWeatherWidget.UI
             BuildFooter();
         }
 
-        public void OpenWith(AppSettings currentSettings, ThemePalette currentTheme, bool focusSearch)
+        public void OpenWith(AppSettings currentSettings, ThemePalette currentTheme, bool focusSearch, string previewKey)
         {
             settings = currentSettings;
             theme = currentTheme;
+            activePreviewKey = String.IsNullOrWhiteSpace(previewKey) ? "live" : previewKey;
 
             PopulateCatalogControls();
             ApplyThemeAndLabels();
@@ -106,10 +116,11 @@ namespace PaperWeatherWidget.UI
             }
         }
 
-        public void RefreshThemeAndLabels(AppSettings currentSettings, ThemePalette currentTheme)
+        public void RefreshThemeAndLabels(AppSettings currentSettings, ThemePalette currentTheme, string previewKey)
         {
             settings = currentSettings;
             theme = currentTheme;
+            activePreviewKey = String.IsNullOrWhiteSpace(previewKey) ? "live" : previewKey;
             PopulateCatalogControls();
             ApplyThemeAndLabels();
         }
@@ -280,6 +291,20 @@ namespace PaperWeatherWidget.UI
             row2.Children.Add(langBlock);
             stack.Children.Add(row2);
 
+            // 3b. Glass translucency segmented bar (Airy / Balanced / Rich)
+            var glassBlock = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+            glassOpacityLabel = MakeSmallLabel();
+            var glassPills = new UniformGrid { Rows = 1, Columns = 3 };
+            glassAiryBtn = MakeSegmentButton(delegate { EmitGlassOpacity("airy"); });
+            glassBalancedBtn = MakeSegmentButton(delegate { EmitGlassOpacity("balanced"); });
+            glassRichBtn = MakeSegmentButton(delegate { EmitGlassOpacity("rich"); });
+            glassPills.Children.Add(glassAiryBtn);
+            glassPills.Children.Add(glassBalancedBtn);
+            glassPills.Children.Add(glassRichBtn);
+            glassBlock.Children.Add(glassOpacityLabel);
+            glassBlock.Children.Add(glassPills);
+            stack.Children.Add(glassBlock);
+
             // 4. Refresh interval segmented bar
             var refreshBlock = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
             refreshLabel = MakeSmallLabel();
@@ -295,6 +320,24 @@ namespace PaperWeatherWidget.UI
             refreshBlock.Children.Add(refreshLabel);
             refreshBlock.Children.Add(refreshGrid);
             stack.Children.Add(refreshBlock);
+
+            // 4b. Live Weather FX Preview bar (test Sunny Sun / Rain on Glass / Night / Storm / Snow anytime!)
+            var previewBlock = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+            scenePreviewLabel = MakeSmallLabel();
+            var previewGrid = new UniformGrid { Rows = 1, Columns = 7 };
+            var previewKeys = new[] { "live", "sunny", "cloudy", "rain", "storm", "night", "snow" };
+            for (var i = 0; i < previewKeys.Length; i++)
+            {
+                var pKey = previewKeys[i];
+                var pBtn = MakeSegmentButton(delegate { EmitScenePreview(pKey); });
+                pBtn.FontSize = 10.5;
+                pBtn.Margin = new Thickness(1, 0, 1, 0);
+                previewButtons[pKey] = pBtn;
+                previewGrid.Children.Add(pBtn);
+            }
+            previewBlock.Children.Add(scenePreviewLabel);
+            previewBlock.Children.Add(previewGrid);
+            stack.Children.Add(previewBlock);
 
             // 5. Switches row: Always on Top + Start on Boot
             var switchesGrid = new UniformGrid { Rows = 1, Columns = 2, Margin = new Thickness(0, 0, 0, 6) };
@@ -675,6 +718,11 @@ namespace PaperWeatherWidget.UI
             if (ThemeModeChanged != null) { ThemeModeChanged(mode); }
         }
 
+        private void EmitGlassOpacity(string mode)
+        {
+            if (GlassOpacityChanged != null) { GlassOpacityChanged(mode); }
+        }
+
         private void EmitLanguage(string lang)
         {
             if (LanguageChanged != null) { LanguageChanged(lang); }
@@ -683,6 +731,12 @@ namespace PaperWeatherWidget.UI
         private void EmitRefresh(int seconds)
         {
             if (RefreshIntervalChanged != null) { RefreshIntervalChanged(seconds); }
+        }
+
+        private void EmitScenePreview(string key)
+        {
+            activePreviewKey = key;
+            if (ScenePreviewChanged != null) { ScenePreviewChanged(key); }
         }
 
         private void OnToggleTopmost()
@@ -745,12 +799,14 @@ namespace PaperWeatherWidget.UI
             cityLabel.Text = LocalizationService.Ui(lang, "City");
             districtLabel.Text = LocalizationService.Ui(lang, "District");
             themeLabel.Text = LocalizationService.Ui(lang, "Theme");
+            glassOpacityLabel.Text = LocalizationService.Ui(lang, "GlassOpacity");
             languageLabel.Text = LocalizationService.Ui(lang, "Language");
             refreshLabel.Text = LocalizationService.Ui(lang, "Refresh");
+            scenePreviewLabel.Text = LocalizationService.Ui(lang, "ScenePreview");
             topmostLabel.Text = LocalizationService.Ui(lang, "TopmostLabel");
             startupLabel.Text = LocalizationService.Ui(lang, "Startup");
 
-            var labels = new[] { provinceLabel, cityLabel, districtLabel, themeLabel, languageLabel, refreshLabel, topmostLabel, startupLabel };
+            var labels = new[] { provinceLabel, cityLabel, districtLabel, themeLabel, glassOpacityLabel, languageLabel, refreshLabel, scenePreviewLabel, topmostLabel, startupLabel };
             for (var i = 0; i < labels.Length; i++)
             {
                 labels[i].Foreground = theme.TextMuted;
@@ -768,6 +824,15 @@ namespace PaperWeatherWidget.UI
             StyleSegment(themeLightBtn, String.Equals(settings.ThemeMode, "light", StringComparison.OrdinalIgnoreCase));
             StyleSegment(themeDarkBtn, String.Equals(settings.ThemeMode, "dark", StringComparison.OrdinalIgnoreCase));
 
+            // Glass opacity pills
+            var gm = settings.GlassOpacityMode ?? "airy";
+            glassAiryBtn.Content = LocalizationService.Ui(lang, "GlassAiry");
+            glassBalancedBtn.Content = LocalizationService.Ui(lang, "GlassBalanced");
+            glassRichBtn.Content = LocalizationService.Ui(lang, "GlassRich");
+            StyleSegment(glassAiryBtn, String.Equals(gm, "airy", StringComparison.OrdinalIgnoreCase));
+            StyleSegment(glassBalancedBtn, String.Equals(gm, "balanced", StringComparison.OrdinalIgnoreCase));
+            StyleSegment(glassRichBtn, String.Equals(gm, "rich", StringComparison.OrdinalIgnoreCase));
+
             // Language pills
             langZhBtn.Content = "中文";
             langEnBtn.Content = "EN";
@@ -779,6 +844,24 @@ namespace PaperWeatherWidget.UI
             {
                 kv.Value.Content = LocalizationService.FormatRefreshShort(lang, kv.Key);
                 StyleSegment(kv.Value, settings.RefreshSeconds == kv.Key);
+            }
+
+            // Live FX Preview pills
+            var previewUiMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "live", "SceneLive" },
+                { "sunny", "SceneSunny" },
+                { "cloudy", "SceneCloudy" },
+                { "rain", "SceneRain" },
+                { "storm", "SceneStorm" },
+                { "night", "SceneNight" },
+                { "snow", "SceneSnow" }
+            };
+            foreach (var kv in previewButtons)
+            {
+                string uiKey;
+                kv.Value.Content = previewUiMap.TryGetValue(kv.Key, out uiKey) ? LocalizationService.Ui(lang, uiKey) : kv.Key;
+                StyleSegment(kv.Value, String.Equals(activePreviewKey, kv.Key, StringComparison.OrdinalIgnoreCase));
             }
 
             ApplyToggleStyles();

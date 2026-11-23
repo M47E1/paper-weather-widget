@@ -73,6 +73,14 @@ namespace PaperWeatherWidget.Services
                             settings.ThemeMode = theme.ToLowerInvariant();
                         }
 
+                        var glassMode = GetString(dict, "GlassOpacityMode");
+                        if (String.Equals(glassMode, "airy", StringComparison.OrdinalIgnoreCase)
+                            || String.Equals(glassMode, "balanced", StringComparison.OrdinalIgnoreCase)
+                            || String.Equals(glassMode, "rich", StringComparison.OrdinalIgnoreCase))
+                        {
+                            settings.GlassOpacityMode = glassMode.ToLowerInvariant();
+                        }
+
                         var pKey = NormalizeLegacyKey(GetString(dict, "ProvinceKey"));
                         var cKey = NormalizeLegacyKey(GetString(dict, "CityKey"));
                         var dKey = NormalizeLegacyKey(GetString(dict, "DistrictKey"));
@@ -153,6 +161,7 @@ namespace PaperWeatherWidget.Services
                 var dict = new Dictionary<string, object>();
                 dict["Language"] = settings.Language;
                 dict["ThemeMode"] = settings.ThemeMode;
+                dict["GlassOpacityMode"] = settings.GlassOpacityMode ?? "airy";
                 dict["ProvinceKey"] = settings.ProvinceKey;
                 dict["CityKey"] = settings.CityKey;
                 dict["DistrictKey"] = settings.DistrictKey;

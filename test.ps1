@@ -42,7 +42,7 @@ Write-Host "[PASS] Catalog unload verified"
 
 # English mode zero-CJK audit
 $locType = $asm.GetType('PaperWeatherWidget.Services.LocalizationService')
-$uiKeys = @('AppTitle','Settings','Back','Location','SearchPlaceholder','NoSearchResults','RefreshNow','PinTopmost','UnpinTopmost','DrawerCollapse','DrawerExpand','Exit','Province','City','District','Refresh','Theme','ThemeAuto','ThemeLight','ThemeDark','Language','Startup','TopmostLabel','On','Off','MoreDetails','LessDetails','MoreSlots','Now','Today','Tomorrow','DayAfterTomorrow','Feels','RainProb','Humidity','Wind','TodayRain','RainNow','Gust','Cloud','Pressure','FiveDayForecast','StateLive','StateRefreshing','StateCached','StateStale','StateFailed','UpdatedPrefix','RefreshFailedHint','OfflineHint','NearTermNone','NearTermPossible','NearTermHeavy','NearTermUnavailable','CreditPrefix')
+$uiKeys = @('AppTitle','Settings','Back','Location','SearchPlaceholder','NoSearchResults','RefreshNow','PinTopmost','UnpinTopmost','DrawerCollapse','DrawerExpand','Exit','Province','City','District','Refresh','Theme','ThemeAuto','ThemeLight','ThemeDark','GlassOpacity','GlassAiry','GlassBalanced','GlassRich','ScenePreview','SceneLive','SceneSunny','SceneCloudy','SceneRain','SceneStorm','SceneNight','SceneSnow','Language','Startup','TopmostLabel','On','Off','MoreDetails','LessDetails','MoreSlots','Now','Today','Tomorrow','DayAfterTomorrow','Feels','RainProb','Humidity','Wind','TodayRain','RainNow','Gust','Cloud','Pressure','FiveDayForecast','StateLive','StateRefreshing','StateCached','StateStale','StateFailed','UpdatedPrefix','RefreshFailedHint','OfflineHint','NearTermNone','NearTermPossible','NearTermHeavy','NearTermUnavailable','CreditPrefix')
 foreach ($k in $uiKeys) {
     $txt = $locType::Ui('en', $k)
     if ($locType::ContainsCjk($txt)) { throw "CJK leaked in EN UI key '$k': $txt" }
@@ -80,8 +80,8 @@ $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
 if ($null -eq $p) { throw "v4 process exited unexpectedly before 5s" }
 $wsMB = [math]::Round($p.WorkingSet64 / 1MB, 2)
 $privMB = [math]::Round($p.PrivateMemorySize64 / 1MB, 2)
-Write-Host "v4.0.0 Process Count: $(1 + $children.Count) (Child processes: $($children.Count))"
-Write-Host "v4.0.0 Memory (after 5s trim): WorkingSet=${wsMB}MB, Private=${privMB}MB"
+Write-Host "v$version Process Count: $(1 + $children.Count) (Child processes: $($children.Count))"
+Write-Host "v$version Memory (after 5s trim): WorkingSet=${wsMB}MB, Private=${privMB}MB"
 if ($children.Count -gt 0) { throw "Unexpected child process spawned!" }
 $proc.WaitForExit(5000) | Out-Null
 if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }

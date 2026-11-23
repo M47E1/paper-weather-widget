@@ -10,11 +10,12 @@ using PaperWeatherWidget.Services;
 namespace PaperWeatherWidget.UI
 {
     /// <summary>
-    /// Sleek edge-docked mini pill (54x104) displaying live vector weather icon + temperature + expand chevron.
-    /// Click to expand; drag vertically to reposition along the docked screen edge.
+    /// v4.1.0 Liquid Glass edge-docked mini pill (54x108) with sky-matched translucent gradient,
+    /// refractive specular rim, live vector weather icon, and current temperature.
     /// </summary>
     public sealed class CollapsedPillView : Border
     {
+        private readonly Border sheenLayer;
         private readonly Border iconHost;
         private readonly TextBlock tempBlock;
         private readonly Border chevronHost;
@@ -30,10 +31,19 @@ namespace PaperWeatherWidget.UI
         public CollapsedPillView()
         {
             Width = 54;
-            Height = 104;
+            Height = 108;
             Cursor = Cursors.Hand;
-            BorderThickness = new Thickness(1);
+            BorderThickness = new Thickness(1.2);
+            ClipToBounds = true;
             SnapsToDevicePixels = true;
+
+            var layer = new Grid();
+
+            sheenLayer = new Border
+            {
+                IsHitTestVisible = false
+            };
+            layer.Children.Add(sheenLayer);
 
             var stack = new StackPanel
             {
@@ -65,30 +75,36 @@ namespace PaperWeatherWidget.UI
                 Width = 14,
                 Height = 14,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Opacity = 0.72
+                Opacity = 0.8
             };
 
             stack.Children.Add(iconHost);
             stack.Children.Add(tempBlock);
             stack.Children.Add(chevronHost);
-            Child = stack;
+            layer.Children.Add(stack);
+            Child = layer;
 
             MouseLeftButtonDown += OnMouseDown;
             MouseMove += OnMouseMove;
             MouseLeftButtonUp += OnMouseUp;
         }
 
-        public void ApplyVisual(ThemePalette theme, string edge, WeatherSnapshot snap, string lang)
+        public void ApplyVisual(ThemePalette theme, string edge, WeatherSnapshot snap, string lang, int? overrideWmo, int? overrideIsDay)
         {
             var isLeft = String.Equals(edge, "Left", StringComparison.OrdinalIgnoreCase);
-            CornerRadius = isLeft ? new CornerRadius(0, 16, 16, 0) : new CornerRadius(16, 0, 0, 16);
-            Background = theme.PillBg;
-            BorderBrush = theme.WindowBorder;
+            var radius = isLeft ? new CornerRadius(0, 18, 18, 0) : new CornerRadius(18, 0, 0, 18);
+            CornerRadius = radius;
+            sheenLayer.CornerRadius = radius;
+            sheenLayer.Background = theme.TopSheenBrush;
+
+            var code = overrideWmo.HasValue ? overrideWmo : (snap != null ? snap.WeatherCode : (int?)2);
+            var isDay = overrideIsDay.HasValue ? overrideIsDay : (snap != null ? snap.IsDay : (int?)1);
+
+            Background = theme.BuildSkyGradient(code, isDay, true);
+            BorderBrush = theme.OuterGlassBorder;
             tempBlock.Foreground = theme.TextPrimary;
 
-            var code = snap != null ? snap.WeatherCode : (int?)2;
-            var isDay = snap != null ? snap.IsDay : (int?)1;
-            iconHost.Child = WeatherIcons.CreateWeatherIcon(code, isDay, 32, theme.IsDark);
+            iconHost.Child = WeatherIcons.CreateWeatherIcon(code, isDay, 32, true);
 
             if (snap != null && snap.Temperature.HasValue)
             {

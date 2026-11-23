@@ -6,6 +6,7 @@ namespace PaperWeatherWidget.Models
     {
         public string Language { get; set; }
         public string ThemeMode { get; set; } // "auto" | "light" | "dark"
+        public string GlassOpacityMode { get; set; } // "airy" | "balanced" | "rich"
         public string ProvinceKey { get; set; }
         public string CityKey { get; set; }
         public string DistrictKey { get; set; }
@@ -35,6 +36,7 @@ namespace PaperWeatherWidget.Models
         {
             Language = "zh";
             ThemeMode = "auto";
+            GlassOpacityMode = "airy";
             ProvinceKey = "440000";
             CityKey = "440300";
             DistrictKey = "440309";

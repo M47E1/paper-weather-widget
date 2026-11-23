@@ -21,6 +21,7 @@ namespace PaperWeatherWidget.UI
         public bool DisableTray { get; set; }
         public string OverrideTheme { get; set; }
         public string OverrideLang { get; set; }
+        public string OverrideScene { get; set; }
         public string RenderShotsDir { get; set; }
         public int HoldOpenMs { get; set; }
 
@@ -51,6 +52,10 @@ namespace PaperWeatherWidget.UI
                 {
                     opt.OverrideLang = args[++i];
                 }
+                else if (String.Equals(a, "--scene", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
+                {
+                    opt.OverrideScene = args[++i];
+                }
                 else if (String.Equals(a, "--render-shots", StringComparison.OrdinalIgnoreCase) && i + 1 < args.Length)
                 {
                     opt.RenderShotsDir = args[++i];
@@ -69,17 +74,18 @@ namespace PaperWeatherWidget.UI
     {
         private static readonly FontFamily UiFont = new FontFamily("Segoe UI Variable Display, Segoe UI, Microsoft YaHei UI");
 
-        private const double CardWidth = 340;
-        private const double CompactCardHeight = 316;
-        private const double DetailedCardHeight = 472;
-        private const double SettingsCardHeight = 408;
+        private const double CardWidth = 348;
+        private const double CompactCardHeight = 330;
+        private const double DetailedCardHeight = 524;
+        private const double SettingsCardHeight = 504;
         private const double CollapsedWidth = 54;
-        private const double CollapsedHeight = 104;
+        private const double CollapsedHeight = 108;
 
         private readonly LaunchOptions launchOptions;
         private readonly SettingsService settingsService;
         private readonly RegionCatalogService catalogService;
         private readonly WeatherService weatherService;
+        private readonly WeatherSceneController sceneController;
         private TrayService trayService;
 
         private AppSettings settings;
@@ -90,13 +96,16 @@ namespace PaperWeatherWidget.UI
         private bool glassBackdropActive;
         private bool settingsOpen;
         private int fetchVersion;
-        private string lastErrorText = String.Empty;
+        private string scenePreviewKey = "live"; // "live" | "sunny" | "cloudy" | "rain" | "storm" | "night" | "snow"
 
         private DispatcherTimer autoRefreshTimer;
         private DispatcherTimer memoryTrimTimer;
 
-        // Visual tree
+        // Visual tree (layered Liquid Glass + Animated Sky)
         private Border rootCard;
+        private Border sheenOverlay;
+        private Border foregroundScrimHost;
+        private Grid foregroundContentGrid;
         private Grid weatherViewGrid;
         private SettingsView settingsView;
         private CollapsedPillView collapsedPill;
@@ -115,11 +124,11 @@ namespace PaperWeatherWidget.UI
 
         // Hero controls
         private TextBlock tempBlock;
+        private Border inlineConditionIconHost;
         private TextBlock conditionBlock;
         private TextBlock feelsRangeBlock;
         private Border nearTermBadge;
         private TextBlock nearTermText;
-        private Border heroIconHost;
 
         // Forecast strip
         private readonly Dictionary<string, Button> slotButtons = new Dictionary<string, Button>(StringComparer.OrdinalIgnoreCase);
@@ -156,6 +165,7 @@ namespace PaperWeatherWidget.UI
             settingsService = new SettingsService();
             catalogService = new RegionCatalogService();
             weatherService = new WeatherService();
+            sceneController = new WeatherSceneController();
 
             settings = settingsService.Load();
             if (!String.IsNullOrWhiteSpace(launchOptions.OverrideTheme))
@@ -166,13 +176,16 @@ namespace PaperWeatherWidget.UI
             {
                 settings.Language = launchOptions.OverrideLang;
             }
+            if (!String.IsNullOrWhiteSpace(launchOptions.OverrideScene))
+            {
+                scenePreviewKey = launchOptions.OverrideScene.ToLowerInvariant();
+            }
             if (launchOptions.DisableTopmost)
             {
                 settings.Topmost = false;
             }
 
             currentDistrict = catalogService.ResolveFromSettings(settings);
-            // If we just hydrated cached coords/names from catalog on first upgrade from v3, save & unload catalog!
             if (catalogService.IsLoaded && String.IsNullOrWhiteSpace(launchOptions.RenderShotsDir))
             {
                 settingsService.SaveSettings(settings);
@@ -186,7 +199,6 @@ namespace PaperWeatherWidget.UI
             ApplyThemeToAll();
             ApplyLanguageToAll();
 
-            // Instant zero-latency boot from disk snapshot if available
             var diskSnap = launchOptions.FixtureMode ? null : weatherService.TryLoadDiskSnapshot(currentDistrict, settings.ForecastSlotKey);
             if (diskSnap != null)
             {
@@ -233,7 +245,7 @@ namespace PaperWeatherWidget.UI
             if (String.IsNullOrWhiteSpace(launchOptions.RenderShotsDir))
             {
                 glassBackdropActive = GlassWindowHelper.ApplyBackdrop(this, theme.IsDark, theme.AcrylicTintAbgr);
-                UpdateCardAtmosphere();
+                UpdateCardAtmosphere(true);
             }
         }
 
@@ -250,6 +262,7 @@ namespace PaperWeatherWidget.UI
                 InitTray();
             }
 
+            UpdateAnimationPlayback();
             StartAutoRefreshTimer();
             TriggerWeatherRefresh(true);
 
@@ -264,7 +277,6 @@ namespace PaperWeatherWidget.UI
                 holdTimer.Start();
             }
 
-            // Trim unused startup pages after 4 seconds
             memoryTrimTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
             memoryTrimTimer.Tick += delegate
             {
@@ -294,10 +306,7 @@ namespace PaperWeatherWidget.UI
                 };
                 trayService.ExitRequested += delegate
                 {
-                    Dispatcher.BeginInvoke(new Action(delegate
-                    {
-                        Close();
-                    }));
+                    Dispatcher.BeginInvoke(new Action(delegate { Close(); }));
                 };
                 UpdateTrayVisual();
             }
@@ -312,6 +321,7 @@ namespace PaperWeatherWidget.UI
             {
                 Show();
                 Activate();
+                UpdateAnimationPlayback();
                 return;
             }
             if (settings.DrawerExpanded)
@@ -332,7 +342,9 @@ namespace PaperWeatherWidget.UI
             var tip = loc;
             if (currentSnapshot != null && currentSnapshot.Temperature.HasValue)
             {
-                var cond = LocalizationService.WeatherConditionText(settings.Language, currentSnapshot.WeatherCode, currentSnapshot.IsDay, currentSnapshot.RawConditionFallback);
+                int? effWmo, effDay;
+                ResolveEffectiveVisualCode(out effWmo, out effDay);
+                var cond = LocalizationService.WeatherConditionText(settings.Language, effWmo, effDay, currentSnapshot.RawConditionFallback);
                 tip = String.Format(CultureInfo.InvariantCulture, "{0} · {1} {2:0.0}°C", loc, cond, currentSnapshot.Temperature.Value);
             }
             trayService.UpdateState(settings.Language, settings.DrawerExpanded, settings.Topmost, tip);
@@ -342,19 +354,46 @@ namespace PaperWeatherWidget.UI
         {
             rootCard = new Border
             {
-                CornerRadius = new CornerRadius(18),
-                BorderThickness = new Thickness(1),
-                Padding = new Thickness(14, 12, 14, 12),
+                CornerRadius = new CornerRadius(22),
+                BorderThickness = new Thickness(1.2),
                 ClipToBounds = true
             };
             rootCard.MouseLeftButtonDown += OnCardMouseLeftButtonDown;
             rootCard.ContextMenu = BuildContextMenu();
 
-            var container = new Grid();
-            rootCard.Child = container;
+            var masterStack = new Grid { ClipToBounds = true };
+            rootCard.Child = masterStack;
 
+            // Layer 0: Living Apple Weather Sky Canvas (behind text & glass cards)
+            sceneController.SetViewportSize(CardWidth, CompactCardHeight);
+            Panel.SetZIndex(sceneController.BackgroundLayer, 0);
+            masterStack.Children.Add(sceneController.BackgroundLayer);
+
+            // Layer 1: Curved Liquid Glass Specular Sheen (non-interactive)
+            sheenOverlay = new Border
+            {
+                CornerRadius = new CornerRadius(21),
+                IsHitTestVisible = false
+            };
+            Panel.SetZIndex(sheenOverlay, 1);
+            masterStack.Children.Add(sheenOverlay);
+
+            // Layer 2: Floating Foreground UI (Weather view or Settings view)
+            foregroundScrimHost = new Border
+            {
+                Padding = new Thickness(15, 13, 15, 13),
+                Background = Brushes.Transparent
+            };
+            foregroundContentGrid = new Grid();
+            foregroundScrimHost.Child = foregroundContentGrid;
+            Panel.SetZIndex(foregroundScrimHost, 2);
             weatherViewGrid = BuildWeatherView();
-            container.Children.Add(weatherViewGrid);
+            foregroundContentGrid.Children.Add(weatherViewGrid);
+            masterStack.Children.Add(foregroundScrimHost);
+
+            // Layer 3: Foreground Liquid Glass Water Droplets (in front of cards, IsHitTestVisible=false!)
+            Panel.SetZIndex(sceneController.ForegroundGlassLayer, 3);
+            masterStack.Children.Add(sceneController.ForegroundGlassLayer);
 
             collapsedPill = new CollapsedPillView();
             collapsedPill.ContextMenu = BuildContextMenu();
@@ -374,20 +413,20 @@ namespace PaperWeatherWidget.UI
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 3: Primary 4 metrics
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 4: Details toggle
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 5: Expandable details
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) }); // spacer
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto }); // 7: Footer
 
             // Row 0: Header bar
-            var header = new Grid { Height = 28, Margin = new Thickness(0, 0, 0, 8) };
+            var header = new Grid { Height = 28, Margin = new Thickness(0, 0, 0, 10) };
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             locationPillBtn = new Button
             {
-                Height = 26,
-                Padding = new Thickness(7, 0, 8, 0),
-                BorderThickness = new Thickness(0),
+                Height = 27,
+                Padding = new Thickness(8, 0, 10, 0),
+                BorderThickness = new Thickness(1),
                 HorizontalAlignment = HorizontalAlignment.Left,
                 HorizontalContentAlignment = HorizontalAlignment.Left,
                 Cursor = Cursors.Hand,
@@ -410,7 +449,6 @@ namespace PaperWeatherWidget.UI
             locationPillBtn.Click += delegate { OpenSettings(true); };
             header.Children.Add(locationPillBtn);
 
-            // Compact live status indicator
             var statusPanel = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
@@ -429,7 +467,7 @@ namespace PaperWeatherWidget.UI
             {
                 FontFamily = UiFont,
                 FontSize = 10.5,
-                FontWeight = FontWeights.Medium,
+                FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center
             };
             statusPanel.Children.Add(statusDot);
@@ -437,7 +475,6 @@ namespace PaperWeatherWidget.UI
             Grid.SetColumn(statusPanel, 1);
             header.Children.Add(statusPanel);
 
-            // Minimal crisp vector action buttons
             var actions = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             refreshBtn = MakeIconButton(delegate { TriggerWeatherRefresh(true); });
             pinBtn = MakeIconButton(delegate { SetTopmost(!settings.Topmost); });
@@ -455,22 +492,32 @@ namespace PaperWeatherWidget.UI
             Grid.SetRow(header, 0);
             grid.Children.Add(header);
 
-            // Row 1: Hero weather section
-            var hero = new Grid { Margin = new Thickness(2, 2, 2, 12) };
-            hero.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            hero.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            // Row 1: Apple Weather Open-Sky Hero (leaves upper-right open so dynamic sun / moon / rain shines!)
+            var hero = new StackPanel { Margin = new Thickness(2, 4, 90, 14) };
 
-            var heroLeft = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
             var tempRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Bottom };
             tempBlock = new TextBlock
             {
                 Text = "--°",
                 FontFamily = UiFont,
-                FontSize = 44,
-                FontWeight = FontWeights.SemiBold,
-                LineHeight = 46,
+                FontSize = 48,
+                FontWeight = FontWeights.Light,
+                LineHeight = 50,
                 LineStackingStrategy = LineStackingStrategy.BlockLineHeight,
                 Margin = new Thickness(0, 0, 8, 0)
+            };
+            var condBadge = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(0, 0, 0, 7)
+            };
+            inlineConditionIconHost = new Border
+            {
+                Width = 20,
+                Height = 20,
+                Margin = new Thickness(0, 0, 4, 0),
+                VerticalAlignment = VerticalAlignment.Center
             };
             conditionBlock = new TextBlock
             {
@@ -478,56 +525,46 @@ namespace PaperWeatherWidget.UI
                 FontFamily = UiFont,
                 FontSize = 15,
                 FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Bottom,
-                Margin = new Thickness(0, 0, 0, 6),
-                MaxWidth = 104,
+                VerticalAlignment = VerticalAlignment.Center,
+                MaxWidth = 100,
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
+            condBadge.Children.Add(inlineConditionIconHost);
+            condBadge.Children.Add(conditionBlock);
             tempRow.Children.Add(tempBlock);
-            tempRow.Children.Add(conditionBlock);
-            heroLeft.Children.Add(tempRow);
+            tempRow.Children.Add(condBadge);
+            hero.Children.Add(tempRow);
 
             feelsRangeBlock = new TextBlock
             {
                 FontFamily = UiFont,
-                FontSize = 11.5,
-                Margin = new Thickness(1, 3, 0, 7)
+                FontSize = 12,
+                FontWeight = FontWeights.Medium,
+                Margin = new Thickness(2, 3, 0, 8)
             };
-            heroLeft.Children.Add(feelsRangeBlock);
+            hero.Children.Add(feelsRangeBlock);
 
             nearTermBadge = new Border
             {
-                CornerRadius = new CornerRadius(7),
-                Padding = new Thickness(8, 3, 8, 3),
+                CornerRadius = new CornerRadius(9),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(9, 3.5, 9, 3.5),
                 HorizontalAlignment = HorizontalAlignment.Left
             };
             nearTermText = new TextBlock
             {
                 FontFamily = UiFont,
                 FontSize = 10.5,
-                FontWeight = FontWeights.Medium,
+                FontWeight = FontWeights.SemiBold,
                 TextTrimming = TextTrimming.CharacterEllipsis
             };
             nearTermBadge.Child = nearTermText;
-            heroLeft.Children.Add(nearTermBadge);
-
-            hero.Children.Add(heroLeft);
-
-            heroIconHost = new Border
-            {
-                Width = 76,
-                Height = 76,
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(6, 0, 0, 0)
-            };
-            Grid.SetColumn(heroIconHost, 1);
-            hero.Children.Add(heroIconHost);
+            hero.Children.Add(nearTermBadge);
 
             Grid.SetRow(hero, 1);
             grid.Children.Add(hero);
 
-            // Row 2: One-click forecast switcher strip right on the main card
+            // Row 2: One-click forecast switcher strip
             var slotBar = new Grid { Margin = new Thickness(0, 0, 0, 10) };
             for (var i = 0; i < QuickSlots.Length + 1; i++)
             {
@@ -538,7 +575,7 @@ namespace PaperWeatherWidget.UI
                 var slotKey = QuickSlots[i];
                 var pill = new Button
                 {
-                    Height = 25,
+                    Height = 26,
                     Margin = new Thickness(i == 0 ? 0 : 2, 0, 2, 0),
                     FontFamily = UiFont,
                     FontSize = 10.5,
@@ -555,7 +592,7 @@ namespace PaperWeatherWidget.UI
 
             moreSlotsBtn = new Button
             {
-                Height = 25,
+                Height = 26,
                 Margin = new Thickness(2, 0, 0, 0),
                 FontFamily = UiFont,
                 FontSize = 10.5,
@@ -571,12 +608,12 @@ namespace PaperWeatherWidget.UI
             Grid.SetRow(slotBar, 2);
             grid.Children.Add(slotBar);
 
-            // Row 3: Primary 4-column glass metrics strip
+            // Row 3: Liquid Glass 4-column primary metrics bar
             primaryMetricsCard = new Border
             {
-                CornerRadius = new CornerRadius(12),
+                CornerRadius = new CornerRadius(15),
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(6, 9, 6, 9),
+                Padding = new Thickness(6, 10, 6, 10),
                 Margin = new Thickness(0, 0, 0, 8)
             };
             var primaryGrid = new UniformGrid { Rows = 1, Columns = 4 };
@@ -588,7 +625,7 @@ namespace PaperWeatherWidget.UI
             Grid.SetRow(primaryMetricsCard, 3);
             grid.Children.Add(primaryMetricsCard);
 
-            // Row 4: Expandable details toggle row
+            // Row 4: Expandable details toggle
             detailsToggleBtn = new Button
             {
                 Height = 24,
@@ -604,7 +641,7 @@ namespace PaperWeatherWidget.UI
             {
                 FontFamily = UiFont,
                 FontSize = 10.5,
-                FontWeight = FontWeights.Medium,
+                FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center
             };
             detailsToggleChevronHost = new Border
@@ -621,7 +658,7 @@ namespace PaperWeatherWidget.UI
             Grid.SetRow(detailsToggleBtn, 4);
             grid.Children.Add(detailsToggleBtn);
 
-            // Row 5: Expandable details (remaining 4 metrics + 5-day mini forecast)
+            // Row 5: Expandable secondary metrics + 5-day strip
             detailsContainer = new StackPanel
             {
                 Visibility = settings.DetailsExpanded ? Visibility.Visible : Visibility.Collapsed,
@@ -630,9 +667,9 @@ namespace PaperWeatherWidget.UI
 
             secondaryMetricsCard = new Border
             {
-                CornerRadius = new CornerRadius(12),
+                CornerRadius = new CornerRadius(15),
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(6, 8, 6, 8),
+                Padding = new Thickness(6, 9, 6, 9),
                 Margin = new Thickness(0, 0, 0, 8)
             };
             var secondaryGrid = new UniformGrid { Rows = 1, Columns = 4 };
@@ -702,7 +739,7 @@ namespace PaperWeatherWidget.UI
             {
                 Text = "--",
                 FontFamily = UiFont,
-                FontSize = 12.5,
+                FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 TextAlignment = TextAlignment.Center
@@ -741,6 +778,31 @@ namespace PaperWeatherWidget.UI
                 mPin.Click += delegate { SetTopmost(!settings.Topmost); };
                 var mDrawer = new MenuItem { Header = LocalizationService.Ui(lang, settings.DrawerExpanded ? "DrawerCollapse" : "DrawerExpand") };
                 mDrawer.Click += delegate { if (settings.DrawerExpanded) { CollapseDrawer(); } else { ExpandDrawer(); } };
+
+                var mPreview = new MenuItem { Header = LocalizationService.Ui(lang, "ScenePreview") };
+                var pairs = new[]
+                {
+                    new[] { "live", "SceneLive" },
+                    new[] { "sunny", "SceneSunny" },
+                    new[] { "cloudy", "SceneCloudy" },
+                    new[] { "rain", "SceneRain" },
+                    new[] { "storm", "SceneStorm" },
+                    new[] { "night", "SceneNight" },
+                    new[] { "snow", "SceneSnow" }
+                };
+                for (var i = 0; i < pairs.Length; i++)
+                {
+                    var key = pairs[i][0];
+                    var sub = new MenuItem
+                    {
+                        Header = LocalizationService.Ui(lang, pairs[i][1]),
+                        IsCheckable = true,
+                        IsChecked = String.Equals(scenePreviewKey, key, StringComparison.OrdinalIgnoreCase)
+                    };
+                    sub.Click += delegate { OnScenePreviewChanged(key); };
+                    mPreview.Items.Add(sub);
+                }
+
                 var mSettings = new MenuItem { Header = LocalizationService.Ui(lang, "Settings") };
                 mSettings.Click += delegate
                 {
@@ -753,6 +815,7 @@ namespace PaperWeatherWidget.UI
                 menu.Items.Add(mRefresh);
                 menu.Items.Add(mPin);
                 menu.Items.Add(mDrawer);
+                menu.Items.Add(mPreview);
                 menu.Items.Add(mSettings);
                 menu.Items.Add(new Separator());
                 menu.Items.Add(mExit);
@@ -789,7 +852,6 @@ namespace PaperWeatherWidget.UI
             settingsService.SaveSettings(settings);
             UpdateSlotPillStyles();
 
-            // Instant projection from memory cache -> 0 network calls!
             var projected = weatherService.TryProjectFromMemoryCache(currentDistrict, slotKey);
             if (projected != null)
             {
@@ -809,6 +871,7 @@ namespace PaperWeatherWidget.UI
             detailsContainer.Visibility = settings.DetailsExpanded ? Visibility.Visible : Visibility.Collapsed;
             ApplyDetailsToggleLabel();
             ApplyWindowModeAndBounds(false);
+            UpdateCardAtmosphere(true);
             RenderFiveDayForecast();
         }
 
@@ -822,23 +885,23 @@ namespace PaperWeatherWidget.UI
                 settingsView.CloseRequested += CloseSettings;
                 settingsView.DistrictSelected += OnDistrictSelected;
                 settingsView.ThemeModeChanged += OnThemeModeChanged;
+                settingsView.GlassOpacityChanged += OnGlassOpacityChanged;
                 settingsView.LanguageChanged += OnLanguageChanged;
                 settingsView.RefreshIntervalChanged += OnRefreshIntervalChanged;
+                settingsView.ScenePreviewChanged += OnScenePreviewChanged;
                 settingsView.TopmostChanged += SetTopmost;
             }
 
-            var container = rootCard.Child as Grid;
-            if (container != null)
+            weatherViewGrid.Visibility = Visibility.Collapsed;
+            if (!foregroundContentGrid.Children.Contains(settingsView))
             {
-                weatherViewGrid.Visibility = Visibility.Collapsed;
-                if (!container.Children.Contains(settingsView))
-                {
-                    container.Children.Add(settingsView);
-                }
-                settingsView.Visibility = Visibility.Visible;
+                foregroundContentGrid.Children.Add(settingsView);
             }
-            settingsView.OpenWith(settings, theme, focusSearch);
+            settingsView.Visibility = Visibility.Visible;
+            settingsView.OpenWith(settings, theme, focusSearch, scenePreviewKey);
             ApplyWindowModeAndBounds(false);
+            UpdateCardAtmosphere(true);
+            UpdateAnimationPlayback();
         }
 
         private void CloseSettings()
@@ -851,8 +914,9 @@ namespace PaperWeatherWidget.UI
             }
             weatherViewGrid.Visibility = Visibility.Visible;
             ApplyWindowModeAndBounds(false);
+            UpdateCardAtmosphere(true);
+            UpdateAnimationPlayback();
 
-            // Release the 2,875-district catalog from memory when Settings closes!
             catalogService.UnloadCatalog();
             GlassWindowHelper.TrimWorkingSet();
         }
@@ -885,8 +949,30 @@ namespace PaperWeatherWidget.UI
             RenderSnapshot();
             if (settingsView != null && settingsOpen)
             {
-                settingsView.RefreshThemeAndLabels(settings, theme);
+                settingsView.RefreshThemeAndLabels(settings, theme, scenePreviewKey);
             }
+        }
+
+        private void OnGlassOpacityChanged(string mode)
+        {
+            settings.GlassOpacityMode = mode;
+            settingsService.SaveSettings(settings);
+            UpdateCardAtmosphere(false);
+            if (settingsView != null && settingsOpen)
+            {
+                settingsView.RefreshThemeAndLabels(settings, theme, scenePreviewKey);
+            }
+        }
+
+        private void OnScenePreviewChanged(string key)
+        {
+            scenePreviewKey = String.IsNullOrWhiteSpace(key) ? "live" : key.ToLowerInvariant();
+            RenderSnapshot();
+            if (settingsView != null && settingsOpen)
+            {
+                settingsView.RefreshThemeAndLabels(settings, theme, scenePreviewKey);
+            }
+            UpdateTrayVisual();
         }
 
         private void OnLanguageChanged(string lang)
@@ -897,7 +983,7 @@ namespace PaperWeatherWidget.UI
             RenderSnapshot();
             if (settingsView != null && settingsOpen)
             {
-                settingsView.RefreshThemeAndLabels(settings, theme);
+                settingsView.RefreshThemeAndLabels(settings, theme, scenePreviewKey);
             }
             UpdateTrayVisual();
         }
@@ -909,7 +995,7 @@ namespace PaperWeatherWidget.UI
             StartAutoRefreshTimer();
             if (settingsView != null && settingsOpen)
             {
-                settingsView.RefreshThemeAndLabels(settings, theme);
+                settingsView.RefreshThemeAndLabels(settings, theme, scenePreviewKey);
             }
             TriggerWeatherRefresh(true);
         }
@@ -922,7 +1008,7 @@ namespace PaperWeatherWidget.UI
             ApplyHeaderIcons();
             if (settingsView != null && settingsOpen)
             {
-                settingsView.RefreshThemeAndLabels(settings, theme);
+                settingsView.RefreshThemeAndLabels(settings, theme, scenePreviewKey);
             }
             UpdateTrayVisual();
         }
@@ -948,7 +1034,6 @@ namespace PaperWeatherWidget.UI
             var slotKey = settings.ForecastSlotKey;
 
             syncState = currentSnapshot != null ? WeatherSyncState.Refreshing : WeatherSyncState.Loading;
-            lastErrorText = String.Empty;
             RenderSyncBadge();
 
             weatherService.FetchWeatherAsync(district, slotKey, forceNetwork, launchOptions.FixtureMode, delegate(WeatherFetchResult res)
@@ -960,11 +1045,9 @@ namespace PaperWeatherWidget.UI
                     {
                         currentSnapshot = res.Snapshot;
                         syncState = WeatherSyncState.Live;
-                        lastErrorText = String.Empty;
                     }
                     else
                     {
-                        lastErrorText = res != null ? res.ErrorMessage : String.Empty;
                         syncState = currentSnapshot != null ? WeatherSyncState.FailedShowingCache : WeatherSyncState.Failed;
                     }
                     RenderSnapshot();
@@ -973,26 +1056,51 @@ namespace PaperWeatherWidget.UI
             });
         }
 
+        private void ResolveEffectiveVisualCode(out int? wmoCode, out int? isDay)
+        {
+            switch (scenePreviewKey)
+            {
+                case "sunny": wmoCode = 0; isDay = 1; return;
+                case "cloudy": wmoCode = 2; isDay = 1; return;
+                case "rain": wmoCode = 63; isDay = 1; return;
+                case "storm": wmoCode = 95; isDay = 0; return;
+                case "night": wmoCode = 0; isDay = 0; return;
+                case "snow": wmoCode = 73; isDay = 1; return;
+                default:
+                    wmoCode = currentSnapshot != null ? currentSnapshot.WeatherCode : (int?)2;
+                    isDay = currentSnapshot != null ? currentSnapshot.IsDay : (int?)1;
+                    return;
+            }
+        }
+
+        private void UpdateAnimationPlayback()
+        {
+            var shouldAnimate = settings.DrawerExpanded && !settingsOpen && IsVisible && String.IsNullOrWhiteSpace(launchOptions.RenderShotsDir);
+            sceneController.SetRunning(shouldAnimate);
+        }
+
         private void ApplyThemeToAll()
         {
-            rootCard.BorderBrush = theme.WindowBorder;
-            UpdateCardAtmosphere();
+            rootCard.BorderBrush = theme.OuterGlassBorder;
+            sheenOverlay.Background = theme.TopSheenBrush;
+            UpdateCardAtmosphere(true);
 
-            locationPillBtn.Background = theme.SurfaceCard;
-            locationPillBtn.Template = SettingsView.BuildRoundedButtonTemplate(13, theme.SurfaceHover);
+            locationPillBtn.Background = theme.InnerGlassCard;
+            locationPillBtn.BorderBrush = theme.InnerGlassBorder;
+            locationPillBtn.Template = SettingsView.BuildRoundedButtonTemplate(13.5, theme.InnerGlassHover);
             locationPillText.Foreground = theme.TextPrimary;
-            locationPinHost.Child = WeatherIcons.MicroIcon(WeatherIcons.GeoPin, theme.AccentText, 12, 1.7);
+            locationPinHost.Child = WeatherIcons.MicroIcon(WeatherIcons.GeoPin, theme.TextPrimary, 12, 1.7);
 
             ApplyHeaderIcons();
 
             tempBlock.Foreground = theme.TextPrimary;
-            conditionBlock.Foreground = theme.TextSecondary;
+            conditionBlock.Foreground = theme.TextPrimary;
             feelsRangeBlock.Foreground = theme.TextSecondary;
 
-            primaryMetricsCard.Background = theme.SurfaceCard;
-            primaryMetricsCard.BorderBrush = theme.SurfaceBorder;
-            secondaryMetricsCard.Background = theme.SurfaceSubtle;
-            secondaryMetricsCard.BorderBrush = theme.SurfaceBorder;
+            primaryMetricsCard.Background = theme.InnerGlassCard;
+            primaryMetricsCard.BorderBrush = theme.InnerGlassBorder;
+            secondaryMetricsCard.Background = theme.InnerGlassSubtle;
+            secondaryMetricsCard.BorderBrush = theme.InnerGlassBorder;
 
             var metricLabels = new[] { rainProbLabel, humidityLabel, windLabel, todayRainLabel, rainNowLabel, gustLabel, cloudLabel, pressureLabel };
             for (var i = 0; i < metricLabels.Length; i++) { metricLabels[i].Foreground = theme.TextMuted; }
@@ -1000,33 +1108,36 @@ namespace PaperWeatherWidget.UI
             var metricVals = new[] { rainProbValue, humidityValue, windValue, todayRainValue, rainNowValue, gustValue, cloudValue, pressureValue };
             for (var i = 0; i < metricVals.Length; i++) { metricVals[i].Foreground = theme.TextPrimary; }
 
-            detailsToggleBtn.Template = SettingsView.BuildRoundedButtonTemplate(8, theme.SurfaceHover);
-            detailsToggleText.Foreground = theme.TextMuted;
-            fiveDayTitle.Foreground = theme.TextMuted;
+            detailsToggleBtn.Template = SettingsView.BuildRoundedButtonTemplate(9, theme.InnerGlassHover);
+            detailsToggleText.Foreground = theme.TextSecondary;
+            fiveDayTitle.Foreground = theme.TextSecondary;
 
             footerUpdatedBlock.Foreground = theme.TextMuted;
             footerErrorBlock.Foreground = theme.DangerDot;
 
             UpdateSlotPillStyles();
             ApplyDetailsToggleLabel();
-            collapsedPill.ApplyVisual(theme, settings.DrawerEdge, currentSnapshot, settings.Language);
+
+            int? effWmo, effDay;
+            ResolveEffectiveVisualCode(out effWmo, out effDay);
+            collapsedPill.ApplyVisual(theme, settings.DrawerEdge, currentSnapshot, settings.Language, effWmo, effDay);
         }
 
         private void ApplyHeaderIcons()
         {
-            var hover = theme.SurfaceHover;
-            refreshBtn.Template = SettingsView.BuildRoundedButtonTemplate(7, hover);
-            pinBtn.Template = SettingsView.BuildRoundedButtonTemplate(7, hover);
-            settingsBtn.Template = SettingsView.BuildRoundedButtonTemplate(7, hover);
-            collapseBtn.Template = SettingsView.BuildRoundedButtonTemplate(7, hover);
-            closeBtn.Template = SettingsView.BuildRoundedButtonTemplate(7, theme.DangerSoft);
+            var hover = theme.InnerGlassHover;
+            refreshBtn.Template = SettingsView.BuildRoundedButtonTemplate(8, hover);
+            pinBtn.Template = SettingsView.BuildRoundedButtonTemplate(8, hover);
+            settingsBtn.Template = SettingsView.BuildRoundedButtonTemplate(8, hover);
+            collapseBtn.Template = SettingsView.BuildRoundedButtonTemplate(8, hover);
+            closeBtn.Template = SettingsView.BuildRoundedButtonTemplate(8, theme.DangerSoft);
 
-            refreshBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoRefresh, theme.TextSecondary, 13, 1.6);
-            pinBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoThumbtack, settings.Topmost ? theme.AccentText : theme.TextMuted, 13, 1.6);
+            refreshBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoRefresh, theme.TextSecondary, 13, 1.7);
+            pinBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoThumbtack, settings.Topmost ? theme.TextPrimary : theme.TextMuted, 13, 1.7);
             pinBtn.Background = settings.Topmost ? theme.AccentSoft : Brushes.Transparent;
-            settingsBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoSettings, theme.TextSecondary, 13, 1.6);
-            collapseBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoCollapse, theme.TextSecondary, 13, 1.6);
-            closeBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoClose, theme.TextSecondary, 12, 1.6);
+            settingsBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoSettings, theme.TextSecondary, 13, 1.7);
+            collapseBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoCollapse, theme.TextSecondary, 13, 1.7);
+            closeBtn.Content = WeatherIcons.MicroIcon(WeatherIcons.GeoClose, theme.TextSecondary, 12, 1.7);
 
             var lang = settings.Language;
             refreshBtn.ToolTip = LocalizationService.Ui(lang, "RefreshNow");
@@ -1063,9 +1174,9 @@ namespace PaperWeatherWidget.UI
             detailsToggleText.Text = LocalizationService.Ui(lang, settings.DetailsExpanded ? "LessDetails" : "MoreDetails");
             detailsToggleChevronHost.Child = WeatherIcons.MicroIcon(
                 settings.DetailsExpanded ? WeatherIcons.GeoChevronUp : WeatherIcons.GeoChevronDown,
-                theme.TextMuted,
+                theme.TextSecondary,
                 10,
-                1.7);
+                1.8);
         }
 
         private void UpdateSlotPillStyles()
@@ -1083,34 +1194,72 @@ namespace PaperWeatherWidget.UI
                 btn.Content = LocalizationService.SlotPillLabel(lang, key);
                 btn.ToolTip = LocalizationService.SlotLabel(lang, key);
                 btn.Background = active ? theme.AccentSoft : Brushes.Transparent;
-                btn.BorderBrush = active ? theme.Accent : Brushes.Transparent;
-                btn.Foreground = active ? theme.AccentText : theme.TextSecondary;
-                btn.Template = SettingsView.BuildRoundedButtonTemplate(8, theme.SurfaceHover);
+                btn.BorderBrush = active ? theme.InnerGlassBorder : Brushes.Transparent;
+                btn.Foreground = active ? theme.TextPrimary : theme.TextSecondary;
+                btn.Template = SettingsView.BuildRoundedButtonTemplate(9, theme.InnerGlassHover);
             }
 
             moreSlotsBtn.Content = !isQuickMatch ? LocalizationService.SlotLabel(lang, activeSlot) : (LocalizationService.Ui(lang, "MoreSlots") + "▾");
             moreSlotsBtn.Background = !isQuickMatch ? theme.AccentSoft : Brushes.Transparent;
-            moreSlotsBtn.BorderBrush = !isQuickMatch ? theme.Accent : Brushes.Transparent;
-            moreSlotsBtn.Foreground = !isQuickMatch ? theme.AccentText : theme.TextMuted;
-            moreSlotsBtn.Template = SettingsView.BuildRoundedButtonTemplate(8, theme.SurfaceHover);
+            moreSlotsBtn.BorderBrush = !isQuickMatch ? theme.InnerGlassBorder : Brushes.Transparent;
+            moreSlotsBtn.Foreground = !isQuickMatch ? theme.TextPrimary : theme.TextMuted;
+            moreSlotsBtn.Template = SettingsView.BuildRoundedButtonTemplate(9, theme.InnerGlassHover);
         }
 
-        private void UpdateCardAtmosphere()
+        private void UpdateCardAtmosphere(bool forceRebuild)
         {
-            var code = currentSnapshot != null ? currentSnapshot.WeatherCode : (int?)2;
-            var isDay = currentSnapshot != null ? currentSnapshot.IsDay : (int?)1;
-            rootCard.Background = theme.BuildAtmosphereBackground(code, isDay, glassBackdropActive);
+            int? effWmo, effDay;
+            ResolveEffectiveVisualCode(out effWmo, out effDay);
+
+            var currentHeight = settingsOpen ? SettingsCardHeight : (settings.DetailsExpanded ? DetailedCardHeight : CompactCardHeight);
+            sceneController.SetViewportSize(CardWidth, currentHeight);
+            rootCard.Background = theme.BuildSkyGradient(effWmo, effDay, glassBackdropActive, settings.GlassOpacityMode);
+
+            var kind = WeatherSceneController.ResolveSceneKind(effWmo, effDay);
+            sceneController.SetScene(kind, forceRebuild);
+
+            // Keep water droplets subtle/hidden and add gentle frosted scrim in Settings for razor-sharp readability
+            sceneController.ForegroundGlassLayer.Visibility = settingsOpen ? Visibility.Collapsed : Visibility.Visible;
+            if (foregroundScrimHost != null)
+            {
+                foregroundScrimHost.Background = settingsOpen ? ThemePalette.FreezeBrush("#580B1426") : Brushes.Transparent;
+            }
+            ScheduleWorkingSetTrim();
+        }
+
+        private void ScheduleWorkingSetTrim()
+        {
+            if (!String.IsNullOrWhiteSpace(launchOptions.RenderShotsDir)) { return; }
+            if (memoryTrimTimer == null)
+            {
+                memoryTrimTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                memoryTrimTimer.Tick += delegate
+                {
+                    memoryTrimTimer.Stop();
+                    GlassWindowHelper.TrimWorkingSet();
+                };
+            }
+            memoryTrimTimer.Stop();
+            memoryTrimTimer.Interval = TimeSpan.FromSeconds(3);
+            memoryTrimTimer.Start();
         }
 
         private void RenderSyncBadge()
         {
             var lang = settings.Language;
+            if (!String.Equals(scenePreviewKey, "live", StringComparison.OrdinalIgnoreCase))
+            {
+                statusDot.Background = theme.WarningDot;
+                statusText.Text = LocalizationService.IsEnglish(lang) ? "FX" : "预览";
+                statusText.Foreground = theme.TextSecondary;
+                return;
+            }
             switch (syncState)
             {
                 case WeatherSyncState.Live:
                     statusDot.Background = theme.SuccessDot;
                     statusText.Text = LocalizationService.Ui(lang, "StateLive");
-                    statusText.Foreground = theme.TextMuted;
+                    statusText.Foreground = theme.TextSecondary;
                     break;
                 case WeatherSyncState.Refreshing:
                 case WeatherSyncState.Loading:
@@ -1121,7 +1270,7 @@ namespace PaperWeatherWidget.UI
                 case WeatherSyncState.Cached:
                     statusDot.Background = theme.Accent;
                     statusText.Text = LocalizationService.Ui(lang, "StateCached");
-                    statusText.Foreground = theme.TextMuted;
+                    statusText.Foreground = theme.TextSecondary;
                     break;
                 case WeatherSyncState.Stale:
                     statusDot.Background = theme.WarningDot;
@@ -1139,8 +1288,13 @@ namespace PaperWeatherWidget.UI
         private void RenderSnapshot()
         {
             var lang = settings.Language;
+            int? effWmo, effDay;
+            ResolveEffectiveVisualCode(out effWmo, out effDay);
+
             RenderSyncBadge();
-            UpdateCardAtmosphere();
+            UpdateCardAtmosphere(false);
+
+            inlineConditionIconHost.Child = WeatherIcons.CreateWeatherIcon(effWmo, effDay, 20, true);
 
             if (currentSnapshot == null)
             {
@@ -1149,12 +1303,12 @@ namespace PaperWeatherWidget.UI
                     ? LocalizationService.Ui(lang, "StateFailed")
                     : LocalizationService.Ui(lang, "StateRefreshing");
                 feelsRangeBlock.Text = LocalizationService.Ui(lang, "Feels") + " --°";
-                nearTermBadge.Background = theme.SurfaceCard;
-                nearTermText.Foreground = theme.TextMuted;
+                nearTermBadge.Background = theme.InnerGlassCard;
+                nearTermBadge.BorderBrush = theme.InnerGlassBorder;
+                nearTermText.Foreground = theme.TextSecondary;
                 nearTermText.Text = syncState == WeatherSyncState.Failed
                     ? LocalizationService.Ui(lang, "OfflineHint")
                     : LocalizationService.Ui(lang, "StateRefreshing");
-                heroIconHost.Child = WeatherIcons.CreateWeatherIcon(2, 1, 74, theme.IsDark);
 
                 rainProbValue.Text = "--%";
                 humidityValue.Text = "--%";
@@ -1168,7 +1322,7 @@ namespace PaperWeatherWidget.UI
                 footerUpdatedBlock.Text = LocalizationService.Ui(lang, syncState == WeatherSyncState.Failed ? "StateFailed" : "StateRefreshing");
                 footerErrorBlock.Visibility = syncState == WeatherSyncState.Failed ? Visibility.Visible : Visibility.Collapsed;
                 footerErrorBlock.Text = LocalizationService.Ui(lang, "OfflineHint");
-                collapsedPill.ApplyVisual(theme, settings.DrawerEdge, null, lang);
+                collapsedPill.ApplyVisual(theme, settings.DrawerEdge, null, lang, effWmo, effDay);
                 return;
             }
 
@@ -1178,8 +1332,8 @@ namespace PaperWeatherWidget.UI
 
             conditionBlock.Text = LocalizationService.WeatherConditionText(
                 lang,
-                currentSnapshot.WeatherCode,
-                currentSnapshot.IsDay,
+                effWmo,
+                effDay,
                 currentSnapshot.RawConditionFallback);
 
             var feelsStr = currentSnapshot.FeelsLike.HasValue
@@ -1200,43 +1354,39 @@ namespace PaperWeatherWidget.UI
                 feelsRangeBlock.Text = feelsStr;
             }
 
-            // Near-term rain badge
-            nearTermText.Text = LocalizationService.NearTermText(lang, currentSnapshot.NearTermKey);
-            if (currentSnapshot.NearTermKey == "heavy")
+            var nearKey = currentSnapshot.NearTermKey;
+            if (scenePreviewKey == "rain") { nearKey = "possible"; }
+            else if (scenePreviewKey == "storm") { nearKey = "heavy"; }
+            else if (scenePreviewKey == "sunny" || scenePreviewKey == "night") { nearKey = "none"; }
+
+            nearTermText.Text = LocalizationService.NearTermText(lang, nearKey);
+            nearTermBadge.BorderBrush = theme.InnerGlassBorder;
+            if (nearKey == "heavy")
             {
                 nearTermBadge.Background = theme.DangerSoft;
                 nearTermText.Foreground = theme.DangerDot;
             }
-            else if (currentSnapshot.NearTermKey == "possible")
+            else if (nearKey == "possible")
             {
                 nearTermBadge.Background = theme.AccentSoft;
-                nearTermText.Foreground = theme.AccentText;
+                nearTermText.Foreground = theme.TextPrimary;
             }
             else
             {
-                nearTermBadge.Background = theme.SurfaceCard;
+                nearTermBadge.Background = theme.InnerGlassCard;
                 nearTermText.Foreground = theme.TextSecondary;
             }
 
-            heroIconHost.Child = WeatherIcons.CreateWeatherIcon(
-                currentSnapshot.WeatherCode,
-                currentSnapshot.IsDay,
-                74,
-                theme.IsDark);
-
-            // Primary 4 metrics
             rainProbValue.Text = FormatPercent(currentSnapshot.RainProbability);
             humidityValue.Text = FormatPercent(currentSnapshot.Humidity);
             windValue.Text = FormatUnit(currentSnapshot.Wind, " km/h", 0);
             todayRainValue.Text = FormatMm(currentSnapshot.TodayRain);
 
-            // Secondary 4 metrics
             rainNowValue.Text = FormatMm(currentSnapshot.RainNow);
             gustValue.Text = FormatUnit(currentSnapshot.Gust, " km/h", 0);
             cloudValue.Text = FormatPercent(currentSnapshot.Cloud);
             pressureValue.Text = FormatUnit(currentSnapshot.Pressure, " hPa", 0);
 
-            // Footer
             var localTime = currentSnapshot.FetchedAtUtc.ToLocalTime().ToString("HH:mm", CultureInfo.InvariantCulture);
             var src = String.IsNullOrWhiteSpace(currentSnapshot.Source) ? "Open-Meteo" : currentSnapshot.Source;
             footerUpdatedBlock.Text = String.Format(
@@ -1257,7 +1407,7 @@ namespace PaperWeatherWidget.UI
             }
 
             RenderFiveDayForecast();
-            collapsedPill.ApplyVisual(theme, settings.DrawerEdge, currentSnapshot, lang);
+            collapsedPill.ApplyVisual(theme, settings.DrawerEdge, currentSnapshot, lang, effWmo, effDay);
         }
 
         private void RenderFiveDayForecast()
@@ -1282,12 +1432,12 @@ namespace PaperWeatherWidget.UI
                 {
                     Margin = new Thickness(i == 0 ? 0 : 3, 0, i == count - 1 ? 0 : 3, 0),
                     Padding = new Thickness(2, 6, 2, 6),
-                    Background = isSelected ? theme.AccentSoft : theme.SurfaceSubtle,
-                    BorderBrush = isSelected ? theme.Accent : theme.SurfaceBorder,
+                    Background = isSelected ? theme.AccentSoft : theme.InnerGlassSubtle,
+                    BorderBrush = isSelected ? theme.OuterGlassBorder : theme.InnerGlassBorder,
                     BorderThickness = new Thickness(1),
                     Cursor = Cursors.Hand,
                     FocusVisualStyle = null,
-                    Template = SettingsView.BuildRoundedButtonTemplate(10, theme.SurfaceHover)
+                    Template = SettingsView.BuildRoundedButtonTemplate(12, theme.InnerGlassHover)
                 };
                 tile.Click += delegate { SelectForecastSlot(slotKey); };
 
@@ -1298,7 +1448,7 @@ namespace PaperWeatherWidget.UI
                     FontFamily = UiFont,
                     FontSize = 10,
                     FontWeight = isSelected ? FontWeights.SemiBold : FontWeights.Medium,
-                    Foreground = isSelected ? theme.AccentText : theme.TextSecondary,
+                    Foreground = isSelected ? theme.TextPrimary : theme.TextSecondary,
                     HorizontalAlignment = HorizontalAlignment.Center
                 });
 
@@ -1308,7 +1458,7 @@ namespace PaperWeatherWidget.UI
                     Height = 24,
                     Margin = new Thickness(0, 4, 0, 4),
                     HorizontalAlignment = HorizontalAlignment.Center,
-                    Child = WeatherIcons.CreateWeatherIcon(item.WeatherCode, 1, 22, theme.IsDark)
+                    Child = WeatherIcons.CreateWeatherIcon(item.WeatherCode, 1, 22, true)
                 };
                 inner.Children.Add(iconWrap);
 
@@ -1340,7 +1490,9 @@ namespace PaperWeatherWidget.UI
             var midX = workArea.Left + workArea.Width / 2.0;
             settings.DrawerEdge = (Left + Width / 2.0) < midX ? "Left" : "Right";
 
-            collapsedPill.ApplyVisual(theme, settings.DrawerEdge, currentSnapshot, settings.Language);
+            int? effWmo, effDay;
+            ResolveEffectiveVisualCode(out effWmo, out effDay);
+            collapsedPill.ApplyVisual(theme, settings.DrawerEdge, currentSnapshot, settings.Language, effWmo, effDay);
             Content = collapsedPill;
             Width = CollapsedWidth;
             Height = CollapsedHeight;
@@ -1349,6 +1501,7 @@ namespace PaperWeatherWidget.UI
                 ? workArea.Left
                 : workArea.Right - Width;
 
+            UpdateAnimationPlayback();
             SaveCurrentPlacement();
             UpdateTrayVisual();
             GlassWindowHelper.TrimWorkingSet();
@@ -1367,6 +1520,7 @@ namespace PaperWeatherWidget.UI
                 : workArea.Right - Width - 12;
             Top = Clamp(Top, workArea.Top + 12, Math.Max(workArea.Top, workArea.Bottom - Height - 12));
 
+            UpdateAnimationPlayback();
             SaveCurrentPlacement();
             UpdateTrayVisual();
         }
@@ -1455,6 +1609,7 @@ namespace PaperWeatherWidget.UI
 
         private void OnWindowClosing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            sceneController.SetRunning(false);
             SaveCurrentPlacement();
             if (autoRefreshTimer != null) { autoRefreshTimer.Stop(); }
             if (memoryTrimTimer != null) { memoryTrimTimer.Stop(); }
@@ -1465,14 +1620,14 @@ namespace PaperWeatherWidget.UI
             }
         }
 
-        // Deterministic 2x PNG snapshot capture for visual QA and before/after comparison
+        // Deterministic 2x PNG snapshot capture across all v4.1.0 Apple Weather + Liquid Glass scenes
         private void RunOffscreenShotCapture(string outDir)
         {
             try
             {
                 Directory.CreateDirectory(outDir);
-
-                // Ensure fixture data is loaded synchronously for deterministic comparison
+                glassBackdropActive = true;
+                settings.GlassOpacityMode = "airy";
                 var res = weatherService.FetchWeatherSync(currentDistrict, "Day0", true, true);
                 if (res != null && res.Success && res.Snapshot != null)
                 {
@@ -1480,65 +1635,85 @@ namespace PaperWeatherWidget.UI
                     syncState = WeatherSyncState.Live;
                 }
 
-                // 1. Dark Compact
-                settings.ThemeMode = "dark";
+                // 1. Sunny Day — Apple Weather Big Radiant Dynamic Sun + Liquid Glass
+                CaptureSceneShot("sunny", false, "zh", false, 2.4, Path.Combine(outDir, "v41-sunny-day.png"));
+
+                // 2. Rain on Liquid Glass — Falling streaks + 3D Refractive Water Droplets on Glass!
+                currentSnapshot.Temperature = 21.3;
+                currentSnapshot.FeelsLike = 20.8;
+                currentSnapshot.RainProbability = 85;
+                currentSnapshot.TodayRain = 14.6;
+                currentSnapshot.RainNow = 3.2;
+                CaptureSceneShot("rain", true, "zh", false, 3.1, Path.Combine(outDir, "v41-rain-glass.png"));
+
+                // 3. Clear Night — Glowing Crescent Moon + Twinkling Stars + Shooting Star
+                currentSnapshot.Temperature = 19.8;
+                currentSnapshot.FeelsLike = 19.5;
+                currentSnapshot.RainProbability = 10;
+                currentSnapshot.TodayRain = 0.0;
+                CaptureSceneShot("night", true, "zh", false, 1.8, Path.Combine(outDir, "v41-clear-night.png"));
+
+                // 4. Thunderstorm + Expanded 5-Day Forecast Details
+                currentSnapshot.Temperature = 22.4;
+                currentSnapshot.FeelsLike = 23.1;
+                currentSnapshot.RainProbability = 95;
+                currentSnapshot.TodayRain = 28.4;
+                currentSnapshot.RainNow = 8.6;
+                CaptureSceneShot("storm", true, "zh", true, 2.2, Path.Combine(outDir, "v41-storm-details.png"));
+
+                // 5. Partly Cloudy English Vivid Mode
+                currentSnapshot.Temperature = 24.6;
+                currentSnapshot.FeelsLike = 25.8;
+                currentSnapshot.RainProbability = 35;
+                currentSnapshot.TodayRain = 1.2;
+                CaptureSceneShot("cloudy", false, "en", false, 1.5, Path.Combine(outDir, "v41-cloudy-en.png"));
+
+                // 6. Settings + Instant Search + Live FX Preview bar
+                scenePreviewKey = "sunny";
                 settings.Language = "zh";
                 settings.DetailsExpanded = false;
-                settings.DrawerExpanded = true;
+                detailsContainer.Visibility = Visibility.Collapsed;
                 theme = ThemePalette.Create(true);
                 ApplyThemeToAll();
-                ApplyLanguageToAll();
-                RenderSnapshot();
-                detailsContainer.Visibility = Visibility.Collapsed;
-                Width = CardWidth;
-                Height = CompactCardHeight;
-                RenderVisualToPng(rootCard, Width, Height, Path.Combine(outDir, "after-v4-dark-compact.png"));
-
-                // 2. Dark Expanded Details + 5-day
-                settings.DetailsExpanded = true;
-                detailsContainer.Visibility = Visibility.Visible;
-                ApplyDetailsToggleLabel();
-                RenderFiveDayForecast();
-                Height = DetailedCardHeight;
-                RenderVisualToPng(rootCard, Width, Height, Path.Combine(outDir, "after-v4-dark-details.png"));
-
-                // 3. Dark Settings + Search
                 OpenSettings(false);
+                Width = CardWidth;
                 Height = SettingsCardHeight;
-                RenderVisualToPng(rootCard, Width, Height, Path.Combine(outDir, "after-v4-dark-settings.png"));
+                UpdateCardAtmosphere(true);
+                sceneController.AdvanceDeterministic(2.0);
+                RenderVisualToPng(rootCard, Width, Height, Path.Combine(outDir, "v41-settings.png"));
                 CloseSettings();
 
-                // 4. Light Compact
-                settings.ThemeMode = "light";
-                settings.DetailsExpanded = false;
-                detailsContainer.Visibility = Visibility.Collapsed;
+                // 7. Collapsed Liquid Glass Edge Pill (Sunny)
+                scenePreviewKey = "sunny";
+                currentSnapshot.Temperature = 26.2;
                 theme = ThemePalette.Create(false);
-                ApplyThemeToAll();
-                ApplyLanguageToAll();
-                RenderSnapshot();
-                Height = CompactCardHeight;
-                RenderVisualToPng(rootCard, Width, Height, Path.Combine(outDir, "after-v4-light-compact.png"));
-
-                // 5. Light English Compact
-                settings.Language = "en";
-                ApplyLanguageToAll();
-                RenderSnapshot();
-                RenderVisualToPng(rootCard, Width, Height, Path.Combine(outDir, "after-v4-light-en.png"));
-
-                // 6. Collapsed Edge Pill (Dark)
-                settings.ThemeMode = "dark";
-                settings.Language = "zh";
-                theme = ThemePalette.Create(true);
-                collapsedPill.ApplyVisual(theme, "Right", currentSnapshot, "zh");
+                collapsedPill.ApplyVisual(theme, "Right", currentSnapshot, "zh", 0, 1);
                 Content = collapsedPill;
                 Width = CollapsedWidth;
                 Height = CollapsedHeight;
-                RenderVisualToPng(collapsedPill, Width, Height, Path.Combine(outDir, "after-v4-collapsed-pill.png"));
+                RenderVisualToPng(collapsedPill, Width, Height, Path.Combine(outDir, "v41-collapsed-pill.png"));
             }
             finally
             {
                 Close();
             }
+        }
+
+        private void CaptureSceneShot(string previewKey, bool isDark, string lang, bool expandDetails, double previewSec, string filePath)
+        {
+            scenePreviewKey = previewKey;
+            settings.Language = lang;
+            settings.DetailsExpanded = expandDetails;
+            detailsContainer.Visibility = expandDetails ? Visibility.Visible : Visibility.Collapsed;
+            theme = ThemePalette.Create(isDark);
+            Width = CardWidth;
+            Height = expandDetails ? DetailedCardHeight : CompactCardHeight;
+            ApplyThemeToAll();
+            ApplyLanguageToAll();
+            RenderSnapshot();
+            UpdateCardAtmosphere(true);
+            sceneController.AdvanceDeterministic(previewSec);
+            RenderVisualToPng(rootCard, Width, Height, filePath);
         }
 
         private void RenderVisualToPng(FrameworkElement visual, double w, double h, string outPath)
