@@ -1,9 +1,12 @@
 root = true
 
 [*]
+charset = utf-8
 end_of_line = crlf
 insert_final_newline = true
 trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
 
-[*.{cs,ps1,md,json,xaml,cmd,txt}]
-charset = utf-8-bom
+[*.md]
+trim_trailing_whitespace = false

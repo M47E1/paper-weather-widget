@@ -1,132 +1,86 @@
-# Paper Weather Widget / 纸感天气小组件
+# Paper Weather Widget v4.0.0 / 纸感天气小组件
 
-Paper Weather Widget is a lightweight Windows weather widget with a paper-toned WPF interface, Chinese / English UI, district-level region switching, cached weather, forecast slots, and a compact side-drawer window.
+A lightweight, modern native Windows 10/11 desktop weather widget — completely refactored in v4.0.0 into a **single-process native C# WPF executable (~264 KB)** with adaptive Dark/Light themes, custom vector weather icons, instant China district search, and one-click forecast switching.
 
-纸感天气小组件是一款轻量 Windows 天气小组件，采用纸感 WPF 界面，支持中文 / English 双语、区县级地区切换、缓存天气、预报时段和紧凑侧边抽屉窗口。
+轻量级、现代化的原生 Windows 10/11 桌面天气小组件。v4.0.0 彻底重构为**纯原生单进程 C# WPF 单文件程序（仅 ~264 KB）**，移除旧版 PowerShell 后台进程与临时文件释放，内存占用大幅下降，并全面升级自适应深浅主题、自定义矢量图标、全国区县实时搜索与桌面交互体验。
 
-This project is independent. It is not affiliated with Anthropic, Claude, Open-Meteo, or wttr.in, and it does not use their brand assets.
+## Preview / 界面预览
 
-本项目为独立项目，与 Anthropic、Claude、Open-Meteo、wttr.in 均无从属或官方合作关系，也不使用它们的品牌资产。
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/v4-dark-compact.png" width="260" alt="Dark Compact" /><br /><sub>Dark Compact / 深色紧凑</sub></td>
+    <td align="center"><img src="docs/screenshots/v4-dark-details.png" width="260" alt="Dark Details & 5-Day" /><br /><sub>Details & 5-Day / 详情与 5 日预报</sub></td>
+    <td align="center"><img src="docs/screenshots/v4-dark-settings.png" width="260" alt="Settings & Search" /><br /><sub>Settings & Search / 设置与实时搜索</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/screenshots/v4-light-compact.png" width="260" alt="Light Compact" /><br /><sub>Light Mode / 浅色模式</sub></td>
+    <td align="center"><img src="docs/screenshots/v4-light-en.png" width="260" alt="English Mode" /><br /><sub>English Mode / 英文模式</sub></td>
+    <td align="center"><img src="docs/screenshots/v4-collapsed-pill.png" height="120" alt="Edge Collapsed Pill" /><br /><sub>Edge Pill / 边缘天气胶囊</sub></td>
+  </tr>
+</table>
 
-## Download / 下载
+## What Changed in v4.0.0 / v4.0.0 核心重构亮点
 
-Download v3.0.0 from GitHub Releases:
+| Metric / 指标 | Legacy v3.0.0 | Refactored v4.0.0 | Improvement |
+| --- | --- | --- | --- |
+| Processes / 后台进程 | 2 (WPF + `powershell.exe`) | **1** (Pure C# WPF) | Zero PowerShell worker |
+| Idle Working Set / 待机物理内存 | 316.3 MB | **~3–6 MB** (peak ~87 MB) | **-98%+** |
+| Private RAM / 专用内存 | 266.4 MB | **~69 MB** (`SoftwareOnly`) | **-74%** |
+| Single EXE Size / 单文件体积 | 1,625.6 KB | **263.5 KB** | **-83.8%** |
+| Embedded Region Catalog (2,875 districts) | 1,342.6 KB JSON | **72.7 KB** GZip TSV | **-94.6%**, lazy-loaded & auto-unloaded |
 
-从 GitHub Releases 下载 v3.0.0：
+### Highlights / 核心功能
+- **Single-File Portable EXE**: Download and run `PaperWeatherWidget-v4.0.0-win-x64.exe` directly — no installer, no admin privileges, no runtime extraction.
+- **Adaptive Windows 11 Theme**: Automatically follows Windows Dark/Light mode (`Auto` / `Light` / `Dark`), paired with subtle weather-reactive atmospheric gradients and pure WPF vector icons.
+- **Instant Region Search**: Search all **34 provinces, 370 cities, and 2,875 districts** in China by Chinese name, English, or Pinyin (plus cascading Province/City/District selectors).
+- **On-Card Forecast Switcher**: Switch between `Now`, `+1h`, `+3h`, `+6h`, `Tomorrow`, `+2d`, and full 14-day / hourly slots directly on the main card with instant in-memory projection.
+- **Expandable Details & 5-Day Strip**: Compact `340×316` default card with a one-click toggle to reveal secondary metrics (current rain, wind gust, cloud cover, pressure) and a clickable 5-day forecast row.
+- **Live Edge-Docked Pill & System Tray**: Collapsing docks a compact `54×104` weather pill (showing live icon + temperature) to the left/right screen edge; supports vertical dragging, pin-on-top toggle, start-on-boot, single-instance guard, and system tray menu.
+- **Bilingual & Offline-Ready**: Full Chinese / English UI (zero CJK leaks in English mode), automatic Open-Meteo primary + `wttr.in` fallback, proxy-to-direct automatic retry, and persistent offline cache.
 
-https://github.com/M47E1/paper-weather-widget/releases/tag/v3.0.0
+## Download & Run / 下载与运行
 
-Recommended assets / 推荐下载：
+Download `PaperWeatherWidget-v4.0.0-win-x64.exe` from the [GitHub Releases](https://github.com/M47E1/paper-weather-widget/releases) page and double-click to launch.
 
-- `PaperWeatherWidget-v3.0.0-win-x64.exe`
-- `SHA256SUMS.txt`
+从 [GitHub Releases](https://github.com/M47E1/paper-weather-widget/releases) 下载 `PaperWeatherWidget-v4.0.0-win-x64.exe` 直接运行即可，无需安装或管理员权限。
 
-Run `PaperWeatherWidget-v3.0.0-win-x64.exe` directly. The worker script and region catalog are bundled inside the exe and are released to the local user cache at runtime.
+## Build & Test from Source / 从源码构建与测试
 
-直接运行 `PaperWeatherWidget-v3.0.0-win-x64.exe`。worker 脚本和地区库已内嵌在 exe 中，运行时会释放到当前用户的本地缓存目录。
-
-No administrator rights are required.
-
-无需管理员权限。
-
-## What It Does / 功能
-
-- Shows current weather, daily forecast, hourly forecast slots, rain, humidity, pressure, wind, gust, cloud cover, and feels-like temperature.
-- 显示当前天气、按日预报、逐小时预报时段、降雨、湿度、气压、风速、阵风、云量和体感温度。
-- Supports Chinese and English labels without restarting the app.
-- 支持中文和英文界面，无需重启即可切换。
-- Switches between built-in province, city, and district locations.
-- 支持内置省、市、区县地点切换。
-- Uses cached weather when refresh fails, then refreshes again in the background.
-- 刷新失败时继续显示缓存天气，并在后台继续刷新。
-- Saves local settings such as language, location, refresh interval, forecast slot, startup option, and window position.
-- 本地保存语言、地点、刷新频率、预报时段、开机启动、窗口位置等设置。
-
-## Weather Providers / 天气数据
-
-Primary provider: Open-Meteo Forecast API.
-
-主要数据源：Open-Meteo Forecast API。
-
-Fallback provider: wttr.in JSON endpoint.
-
-备用数据源：wttr.in JSON 接口。
-
-When the fallback is used, wttr.in receives the selected district coordinates needed for the weather lookup.
-
-启用备用数据源时，wttr.in 会收到用于查询天气的所选区县坐标。
-
-No API key, account, paid weather service, telemetry, WebView2, Node.js, or browser runtime is required.
-
-不需要 API key、账号、付费天气服务、遥测、WebView2、Node.js 或浏览器运行时。
-
-## Build From Source / 从源码构建
-
-Build the Thin CLR launcher for development:
-
-构建 Thin CLR 开发版启动器：
+No external SDK required — builds natively on Windows 10/11 using the built-in .NET Framework 4.8 C# compiler (`csc.exe`):
 
 ```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 3.0.0
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\test.ps1
 ```
 
-Create the single exe release asset and hashes:
+Build output: `dist\PaperWeatherWidget-v4.0.0-win-x64.exe` and `dist\SHA256SUMS.txt`.
 
-生成单 exe release 资产和哈希：
+## Project Structure / 项目结构
 
-```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\build-single-exe-release.ps1 -Version 3.0.0
+```text
+src/
+├── Program.cs                  # Entry point, SoftwareOnly render mode, single-instance mutex
+├── Models/
+│   ├── AppSettings.cs          # Persistent settings & cached district coordinates
+│   ├── RegionModels.cs         # Compact province/city/district models
+│   └── WeatherModels.cs        # Weather snapshot, hourly/daily forecast, sync states
+├── Services/
+│   ├── LocalizationService.cs  # Bilingual zh/en dictionary, WMO codes, English region names
+│   ├── RegionCatalogService.cs # Lazy GZip TSV loader + instant ZH/EN/Pinyin search
+│   ├── SettingsService.cs      # Atomic JSON storage + Windows startup registry toggle
+│   ├── TrayService.cs          # Lightweight native Windows NotifyIcon tray integration
+│   └── WeatherService.cs       # Native async HTTP client (Open-Meteo + wttr.in + offline cache)
+└── UI/
+    ├── ThemePalette.cs         # Adaptive Dark/Light frozen brush palettes + weather gradients
+    ├── GlassWindowHelper.cs    # Win11 DWM rounded corners, acrylic backdrop, working-set trim
+    ├── WeatherIcons.cs         # Pure vector WPF weather icons & UI micro-icons
+    ├── MainWindow.cs           # Compact adaptive card, forecast bar, expandable details
+    ├── SettingsView.cs         # In-card settings & instant district search drawer
+    └── CollapsedPillView.cs    # Edge-docked live icon + temperature pill
 ```
 
-Release output:
+## Data, Privacy & License / 数据、隐私与许可证
 
-发布输出：
-
-- `dist/release/v3.0.0/PaperWeatherWidget-v3.0.0-win-x64.exe`
-- `dist/release/v3.0.0/SHA256SUMS.txt`
-
-## Run From Source / 从源码运行
-
-Legacy PowerShell entrypoint:
-
-旧 PowerShell 入口：
-
-```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Sta -File .\LonghuaWeatherWidget.ps1
-```
-
-Thin CLR development build:
-
-Thin CLR 开发构建：
-
-```powershell
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\src\launcher\build-launcher.ps1 -Version 3.0.0
-.\dist\launcher\WeatherLauncher.exe
-```
-
-## Settings / 设置
-
-Runtime settings are stored under the current user's local app data folder: `%LOCALAPPDATA%\PaperWeatherWidget\`. Do not commit real local settings, private paths, tokens, or exact home addresses.
-
-运行时设置保存在当前用户的本地应用数据目录：`%LOCALAPPDATA%\PaperWeatherWidget\`。请不要提交真实本地设置、私有路径、token 或精确家庭地址。
-
-## Verification / 验证
-
-Use the verification scope that matches the change. Release builds should at least run project tests, launcher build, package verification, and a targeted UI smoke test for the changed surface.
-
-请按改动范围选择验证方式。正式发布至少应运行项目测试、启动器构建、打包校验，以及针对改动界面的 UI smoke 检查。
-
-## Known Limitations / 已知限制
-
-- The EXE is unsigned. Windows SmartScreen may show an unknown publisher warning on first launch.
-- EXE 未签名，Windows SmartScreen 首次启动时可能提示未知发布者。
-- Open-Meteo provides model weather data, not official on-site observation.
-- Open-Meteo 提供的是模型天气数据，不是官方现场观测。
-- Model-derived tips are only weather risk hints, not official warnings.
-- 模型推导内容只作为天气风险提示，不是官方预警。
-
-## License / 许可证
-
-MIT License. See `LICENSE`.
-
-MIT 许可证。详见 `LICENSE`。
+- Weather data is fetched directly from [Open-Meteo](https://open-meteo.com/) (primary) and [wttr.in](https://wttr.in/) (fallback) using only the selected district's coordinates. No API key or account is needed.
+- User settings and offline snapshots are stored locally in `%LOCALAPPDATA%\PaperWeatherWidget\` and are never committed to the repository.
+- Licensed under the [MIT License](LICENSE).
